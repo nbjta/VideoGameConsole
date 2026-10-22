@@ -43,11 +43,10 @@ GAMES: List[GameEntry] = [
         mode_arg="debug",
         source_url=WEBCAM_GAMES_REPO,
     ),
-    # issue #1
     GameEntry(
         id="flying-users-ar",
         title="Flyvende brugere (AR)",
-        description="Brugere flyver imod dig i webcam som augmented reality.",
+        description="Kast burgere med armen. Brugere flyver imod dig i webcam-AR.",
         mode_arg="flying_users",
         source_url="https://github.com/nbjta/VideoGameConsole",
         launcher="builtin",

@@ -29,13 +29,11 @@ def launch_game_entry(entry: GameEntry, camera: int = 0) -> Tuple[bool, str]:
         from gamConsole.jdwebcam_launcher import launch as launch_jdwebcam
 
         return launch_jdwebcam()
-    # issue #1
     if entry.launcher == "builtin":
         return _launch_python_module(entry, camera)
     return launch_game(entry.mode_arg or "", camera)
 
 
-# issue #1
 def _launch_python_module(entry: GameEntry, camera: int) -> Tuple[bool, str]:
     modules = {
         "flying_users": "gamConsole.flying_users_ar",

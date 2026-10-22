@@ -21,7 +21,6 @@ class SmokeTest(unittest.TestCase):
         ids = {g.id for g in GAMES}
         self.assertIn("just-dance", ids)
         self.assertIn("jdwebcam", ids)
-        # issue #1
         self.assertIn("flying-users-ar", ids)
 
     def test_webcam_preview_import(self) -> None:
