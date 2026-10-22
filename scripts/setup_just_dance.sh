@@ -12,6 +12,9 @@ else
 fi
 
 echo "Installer afhængigheder (kan tage lang tid — TensorFlow) …"
-"$ROOT/.venv/bin/pip" install -r "$DEST/requirements.txt" 2>/dev/null || pip3 install -r "$DEST/requirements.txt"
+PIP="$ROOT/.venv/bin/pip"
+if [[ ! -x "$PIP" ]]; then PIP="pip3"; fi
+"$PIP" install -r "$DEST/requirements.txt"
+"$PIP" install PyObjC
 
 echo "OK: $DEST — start fra menu eller: cd vendor/just-dance && python3 just_dance_gui.py"

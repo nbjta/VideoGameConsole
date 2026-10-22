@@ -10,7 +10,8 @@ import cv2
 import numpy as np
 
 from gamConsole.cvgames_launcher import cvgames_binary, is_webcam_games_installed
-from gamConsole.game_launcher import launch_game_entry, stop_all_games
+from gamConsole.child_processes import reap_finished_children, stop_all_games
+from gamConsole.game_launcher import launch_game_entry
 from gamConsole.games_registry import GameEntry, games_for_menu
 from gamConsole.opencv_ui import (
     QUIT_BAR_H,
@@ -23,7 +24,8 @@ from gamConsole.opencv_ui import (
 WIN = "gamConsole"
 PANEL_W = 400
 CAM_W = 560
-WIN_H = 700
+# issue #1
+WIN_H = 840
 BG = (26, 26, 46)
 CARD = (22, 33, 62)
 CARD_HOVER = (32, 48, 88)
@@ -166,9 +168,29 @@ def run_opencv_menu() -> None:
     canvas_w = PANEL_W + CAM_W
     canvas_h = WIN_H
     request_quit = False
+    camera_loaned = False
+
+    def _release_camera_for_external_game() -> None:
+        nonlocal cap, camera_loaned
+        if cap.isOpened():
+            cap.release()
+        camera_loaned = True
+
+    def _try_reopen_camera() -> None:
+        nonlocal cap, camera_loaned
+        if not camera_loaned:
+            return
+        if reap_finished_children():
+            return
+        cap = cv2.VideoCapture(camera_index)
+        if cap.isOpened():
+            camera_loaned = False
 
     def _do_launch(game: GameEntry) -> None:
         nonlocal toast, toast_frames, active_idx, active_frames
+        # issue #1
+        if game.launcher in ("just_dance", "jdwebcam", "builtin"):
+            _release_camera_for_external_game()
         toast = f"Starter {game.title}…"
         toast_frames = 120
         ok, msg = launch_game_entry(game, camera=camera_index)
@@ -207,13 +229,37 @@ def run_opencv_menu() -> None:
     while True:
         if request_quit or window_was_closed(WIN):
             break
+        reap_finished_children()
+        _try_reopen_camera()
         if active_frames > 0:
             active_frames -= 1
         else:
             active_idx = None
 
         panel, boxes = _build_panel(games, hover_idx, active_idx)
-        if cap.isOpened():
+        if camera_loaned and reap_finished_children():
+            frame = np.zeros((WIN_H, CAM_W, 3), dtype=np.uint8)
+            cv2.putText(
+                frame,
+                "Kamera bruges af spil",
+                (40, WIN_H // 2 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.75,
+                MUTED,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                "Luk spil med Q",
+                (40, WIN_H // 2 + 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                MUTED,
+                1,
+                cv2.LINE_AA,
+            )
+        elif cap.isOpened():
             ok, frame = cap.read()
             if ok:
                 frame = cv2.resize(frame, (CAM_W, WIN_H))

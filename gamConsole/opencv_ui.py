@@ -47,6 +47,7 @@ def run_window_loop(
     window_name: str,
     cap: cv2.VideoCapture,
     render: Callable[[], Optional[object]],
+    on_key: Optional[Callable[[int], None]] = None,
 ) -> None:
     """Vis render() hvert frame indtil luk (klik, Q, Esc eller rødt X)."""
     stop = False
@@ -72,6 +73,9 @@ def run_window_loop(
         key = cv2.waitKey(1) & 0xFF
         if key_requests_quit(key):
             break
+        # issue #1
+        if on_key is not None and key not in (255, 0):
+            on_key(key)
 
     cap.release()
     cv2.destroyAllWindows()

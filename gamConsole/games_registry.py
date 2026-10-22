@@ -43,10 +43,19 @@ GAMES: List[GameEntry] = [
         mode_arg="debug",
         source_url=WEBCAM_GAMES_REPO,
     ),
+    # issue #1
+    GameEntry(
+        id="flying-users-ar",
+        title="Flyvende brugere (AR)",
+        description="Brugere flyver imod dig i webcam som augmented reality.",
+        mode_arg="flying_users",
+        source_url="https://github.com/nbjta/VideoGameConsole",
+        launcher="builtin",
+    ),
     GameEntry(
         id="just-dance",
         title="Just Dance (Python)",
-        description="Olincollege clone: dans med webcam og score (tung: TensorFlow + assets).",
+        description="Olincollege clone (standard: Cheap Thrills). TensorFlow — opstart ~30 sek.",
         mode_arg="cheapthrills",
         source_url="https://github.com/olincollege/just-dance",
         launcher="just_dance",
