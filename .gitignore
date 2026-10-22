@@ -1,0 +1,6 @@
+.venv/
+leaderboard.csv
+__pycache__/
+*.pyc
+.DS_Store
+vendor/
