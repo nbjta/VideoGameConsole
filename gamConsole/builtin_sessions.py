@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from gamConsole.hand_pip_overlay import HandPipOverlay
-from gamConsole.house_build import HouseBuildScene
+from gamConsole.house_build import HouseBuildScene, apply_hand_input
 
 
 def _motion_mask(gray: np.ndarray, prev: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
@@ -100,17 +100,7 @@ class BuiltinSession:
         assert self._hand_pip is not None
         #8 Bjælken flytter sig kun mens hånden er klemt.
         track = self._hand_pip.read(camera)
-        if track is not None:
-            h, w = camera.shape[:2]
-            px, py = track.palm_norm
-            self._house.steer(
-                camera.shape,
-                (int(px * w), int(py * h)),
-                holding=track.clenched,
-                landmarks=track.points,
-            )
-        else:
-            self._house.steer(camera.shape, None)
+        apply_hand_input(self._house, track, camera)
         self._house.draw(frame)
         self._hand_pip.draw(frame, camera=camera)
         return frame

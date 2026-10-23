@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
+from gamConsole.house_paint_assets import blit_brush
+from gamConsole.house_tool_cards import ToolCardBar, paint_color_for
 from gamConsole.opencv_ui import draw_text
+
+if TYPE_CHECKING:
+    from gamConsole.hand_pip_overlay import HandTrack
 
 Point = Tuple[int, int]
 
@@ -126,6 +131,14 @@ class PlacedPiece:
     step: BuildStep
 
 
+@dataclass
+class PaintDot:
+    u: float
+    v: float
+    radius: float
+    color: Tuple[int, int, int]
+
+
 class HouseBuildScene:
     """Progressiv bjælkebygning på pladen med spøgelses-markering og snap."""
 
@@ -142,6 +155,10 @@ class HouseBuildScene:
         self._slab_top: Optional[np.ndarray] = None
         self._grip_px: Optional[Point] = None
         self._grip_landmarks: Optional[Sequence[Tuple[float, float]]] = None
+        self._grip_holding = False
+        #8 Værktøjskort + maling på materialer der allerede ligger på pladen.
+        self.tool_bar = ToolCardBar()
+        self.paint_dots: List[PaintDot] = []
         self._load_step(start_offset=True)
 
     # Bevar API til ældre tests der læser vinkler — mappes til placering.
@@ -175,6 +192,32 @@ class HouseBuildScene:
             self.beam_u = 0.5
             self.beam_v = 0.55
 
+    def select_tool(self, tool_id: str) -> None:
+        self.tool_bar.selected_id = tool_id
+
+    def brush_active(self) -> bool:
+        return self.tool_bar.selected_id.startswith("brush_")
+
+    def paint_at_pixel(self, px: int, py: int) -> None:
+        if self._slab_top is None or not self.placed:
+            return
+        color = paint_color_for(self.tool_bar.selected_id)
+        if color is None:
+            return
+        uv = _pixel_to_slab_uv(self._slab_top, px, py)
+        if uv is None or not _uv_on_placed_material(uv, self.placed):
+            return
+        u, v = uv
+        if self.paint_dots:
+            last = self.paint_dots[-1]
+            if (
+                abs(last.u - u) < 0.008
+                and abs(last.v - v) < 0.008
+                and last.color == color
+            ):
+                return
+        self.paint_dots.append(PaintDot(u, v, 0.018, color))
+
     def alignment_error(self) -> float:
         step = self._current()
         if step is None:
@@ -192,13 +235,15 @@ class HouseBuildScene:
         self._update_snap()
         if self.complete or self.snap_anim > 0 or self.reward_frames > 0:
             return
-        #8 Punkthånden bliver på bjælken. Kun et klem flytter den.
+        #8 Hånden følger palm i billedet. Kun klem flytter delen på pladen.
         if centroid is None:
             self._grip_px = None
             self._grip_landmarks = None
+            self._grip_holding = False
             return
         self._grip_px = (int(centroid[0]), int(centroid[1]))
         self._grip_landmarks = landmarks
+        self._grip_holding = holding
         if not holding:
             return
         height, width = int(frame_shape[0]), int(frame_shape[1])
@@ -241,16 +286,36 @@ class HouseBuildScene:
         self._slab_top = top
         for piece in self.placed:
             _paint_piece(frame, top, piece.step, piece.step.target_u, piece.step.target_v, ghost=False)
+        self._draw_paint(top, frame)
         step = self._current()
         if step is not None:
             _paint_piece(frame, top, step, step.target_u, step.target_v, ghost=True)
             _paint_piece(frame, top, step, self.beam_u, self.beam_v, ghost=False)
-            if self.snap_anim == 0 and self.reward_frames == 0 and self._grip_px is not None:
-                anchor = _grasp_anchor(top, step, self.beam_u, self.beam_v)
-                span = _piece_longest_side(top, step, self.beam_u, self.beam_v)
-                _draw_grasp_hand(frame, self._grip_px, anchor, span, self._grip_landmarks)
             self._draw_target_hint(frame, step)
+        self.tool_bar.draw(frame)
+        if self._grip_landmarks is not None:
+            h, w = frame.shape[:2]
+            grab_anchor: Optional[Point] = None
+            if (
+                step is not None
+                and self._grip_holding
+                and not self.brush_active()
+                and self.snap_anim == 0
+                and self.reward_frames == 0
+            ):
+                grab_anchor = _grasp_anchor(top, step, self.beam_u, self.beam_v)
+            if self.brush_active():
+                _draw_brush_at_hand(frame, self._grip_landmarks, w, h)
+            else:
+                _draw_screen_hand(frame, self._grip_landmarks, w, h, grab_anchor=grab_anchor)
         self._draw_hud(frame)
+
+    def _draw_paint(self, top: np.ndarray, frame: np.ndarray) -> None:
+        h, w = frame.shape[:2]
+        for dot in self.paint_dots:
+            cx, cy = _slab_point(top, dot.u, dot.v)
+            r = max(3, int(dot.radius * w))
+            cv2.circle(frame, (cx, cy), r, dot.color, -1, cv2.LINE_AA)
 
     def _draw_target_hint(self, frame: np.ndarray, step: BuildStep) -> None:
         h, w = frame.shape[:2]
@@ -283,11 +348,16 @@ class HouseBuildScene:
             return
         step = self._current()
         total = len(self.steps)
+        tool_hint = (
+            "Klem på pensel-kort, tegn på materialer på pladen"
+            if self.brush_active()
+            else "Vælg værktøj øverst — klem for at tage fat om del"
+        )
         draw_text(
             frame,
-            f"Opgave {self.step_index + 1} / {total} — klem hånden for at tage fat",
-            (16, 12),
-            scale=0.46,
+            f"Opgave {self.step_index + 1} / {total} — {tool_hint}",
+            (16, ToolCardBar.BAR_H + 6),
+            scale=0.44,
             color=(236, 236, 236),
         )
         if self.reward_frames > 0:
@@ -355,45 +425,126 @@ _HAND_JOINT = (255, 255, 255)
 
 
 #8
-def _piece_longest_side(top: np.ndarray, step: BuildStep, u: float, v: float) -> int:
-    """Længste side af den del hånden holder om."""
-    return _part(step.kind).span(top, step, u, v)
+def _landmarks_on_frame(landmarks: Sequence[Tuple[float, float]]) -> Tuple[Tuple[float, float], ...]:
+    """MediaPipe kører på spejlvendt camera; scenen tegnes på u-spejlet frame."""
+    return tuple((1.0 - float(x), float(y)) for x, y in landmarks)
+
+
+def _palm_frame_px(landmarks: Sequence[Tuple[float, float]], width: int, height: int) -> Point:
+    ids = (0, 5, 9, 13, 17)
+    xs = [landmarks[i][0] for i in ids]
+    ys = [landmarks[i][1] for i in ids]
+    return int(sum(xs) / len(xs) * width), int(sum(ys) / len(ys) * height)
 
 
 #8
-def _draw_grasp_hand(
+def _draw_brush_at_hand(
     frame: np.ndarray,
-    grip: Point,
-    anchor: Point,
-    piece_span: int,
-    landmarks: Optional[Sequence[Tuple[float, float]]] = None,
+    landmarks: Sequence[Tuple[float, float]],
+    width: int,
+    height: int,
 ) -> None:
-    """Punkt-hånd på bjælken. Live-punkter følger fingrene, ellers den åbne stilling."""
-    #8 Samme 21 punkter som hjørne-skelettet, så et klem ses på bjælken.
-    source: Sequence[Tuple[float, float]] = (
-        landmarks if landmarks is not None and len(landmarks) >= 21 else _POINT_HAND
-    )
-    span = max(48, int(piece_span * 2.6))
-    # Hele skelettet skal kunne ses. Ellers bliver det kun kæmpe prikker.
-    span = min(span, int(min(frame.shape[0], frame.shape[1]) * 0.52))
-    # #8 Håndfladen har fast størrelse, så et klem kun flytter fingrene.
-    palm_len = math.hypot(source[9][0] - source[0][0], source[9][1] - source[0][1])
-    scale = (span * 0.42) / max(palm_len, 1e-4)
-    palm_ids = (0, 5, 9, 13, 17)
-    palm_x = sum(source[i][0] for i in palm_ids) / len(palm_ids)
-    palm_y = sum(source[i][1] for i in palm_ids) / len(palm_ids)
-    ax, ay = anchor
-    placed: List[Point] = []
-    for x, y in source:
-        placed.append((int(ax + (x - palm_x) * scale), int(ay + (y - palm_y) * scale)))
-    thick = max(4, span // 36)
-    joint_r = max(6, span // 22)
-    cv2.line(frame, grip, placed[0], _HAND_LINE, 2, cv2.LINE_AA)
+    if len(landmarks) < 9:
+        return
+    wrist = _landmark_to_pixel(landmarks[0][0], landmarks[0][1], width, height)
+    index_tip = _landmark_to_pixel(landmarks[8][0], landmarks[8][1], width, height)
+    cx = (wrist[0] + index_tip[0]) // 2
+    cy = (wrist[1] + index_tip[1]) // 2
+    angle = math.degrees(math.atan2(index_tip[1] - wrist[1], index_tip[0] - wrist[0])) - 55.0
+    size = max(48, int(min(width, height) * 0.13))
+    blit_brush(frame, cx, cy, max_height=size, angle_deg=angle)
+
+
+#8
+def _landmark_to_pixel(x: float, y: float, width: int, height: int) -> Point:
+    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+        return int(x * width), int(y * height)
+    return int(x), int(y)
+
+
+#8
+def _draw_screen_hand(
+    frame: np.ndarray,
+    landmarks: Sequence[Tuple[float, float]],
+    width: int,
+    height: int,
+    *,
+    grab_anchor: Optional[Point] = None,
+) -> None:
+    """Punkt-hånd frit i billedet — som PiP — valgfri streg til del ved klem."""
+    source = landmarks if len(landmarks) >= 21 else _POINT_HAND
+    placed: List[Point] = [_landmark_to_pixel(x, y, width, height) for x, y in source]
+    thick = max(3, int(min(width, height) * 0.012))
+    joint_r = max(5, thick + 2)
+    max_seg = float(min(width, height) * 0.38)
     for a, b in _POINT_HAND_LINKS:
+        ax, ay = placed[a]
+        bx, by = placed[b]
+        if math.hypot(ax - bx, ay - by) > max_seg:
+            continue
         cv2.line(frame, placed[a], placed[b], _HAND_LINE, thick, cv2.LINE_AA)
     for px, py in placed:
         cv2.circle(frame, (px, py), joint_r, _HAND_JOINT, -1, cv2.LINE_AA)
         cv2.circle(frame, (px, py), max(3, joint_r * 3 // 5), _HAND_LINE, -1, cv2.LINE_AA)
+    if grab_anchor is not None:
+        cv2.line(frame, placed[9], grab_anchor, (180, 220, 255), 2, cv2.LINE_AA)
+
+
+#8
+def apply_hand_input(scene: "HouseBuildScene", track: Optional["HandTrack"], camera: np.ndarray) -> None:
+    """Værktøjskort, maling eller flytning af del — afhængigt af valg og klem."""
+    h, w = camera.shape[:2]
+    if track is None:
+        scene.steer(camera.shape, None)
+        return
+    lm = _landmarks_on_frame(track.points)
+    px, py = _palm_frame_px(lm, w, h)
+    card_tool = scene.tool_bar.tool_at(px, py, w)
+    if card_tool is not None and track.clenched:
+        scene.select_tool(card_tool)
+        scene.steer(camera.shape, (px, py), holding=False, landmarks=lm)
+        return
+    if scene.brush_active() and track.clenched and py > scene.tool_bar.BAR_H + 4:
+        scene.paint_at_pixel(px, py)
+        scene.steer(camera.shape, (px, py), holding=False, landmarks=lm)
+        return
+    if scene.brush_active():
+        scene.steer(camera.shape, (px, py), holding=False, landmarks=lm)
+        return
+    scene.steer(
+        camera.shape,
+        (px, py),
+        holding=track.clenched,
+        landmarks=lm,
+    )
+
+
+def _uv_on_placed_material(uv: Tuple[float, float], placed: Sequence[PlacedPiece]) -> bool:
+    u, v = uv
+    for piece in placed:
+        tu, tv = piece.step.target_u, piece.step.target_v
+        if math.hypot(u - tu, v - tv) < 0.24:
+            return True
+    return False
+
+
+def _pixel_to_slab_uv(top: np.ndarray, px: int, py: int) -> Optional[Tuple[float, float]]:
+    if cv2.pointPolygonTest(top, (float(px), float(py)), False) < 0:
+        return None
+    best_u, best_v = 0.5, 0.5
+    best_d = 1e12
+    for i in range(33):
+        u = i / 32.0
+        for j in range(33):
+            v = j / 32.0
+            sx, sy = _slab_point(top, u, v)
+            d = (sx - px) ** 2 + (sy - py) ** 2
+            if d < best_d:
+                best_d = d
+                best_u, best_v = u, v
+    if best_d > 55 * 55:
+        return None
+    return best_u, best_v
 
 
 def _slab_point(top: np.ndarray, u: float, v: float) -> Point:

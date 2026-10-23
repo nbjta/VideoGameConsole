@@ -77,8 +77,8 @@ class StreetKittenMotionTest(unittest.TestCase):
         near.depth = 1.0
         far = self._kitten()
         far.depth = 0.0
-        near_h = _drawn_kitten_height(near._body_scale(640, 480))
-        far_h = _drawn_kitten_height(far._body_scale(640, 480))
+        near_h = _drawn_kitten_height(near._body_scale(480, 640))
+        far_h = _drawn_kitten_height(far._body_scale(480, 640))
         self.assertAlmostEqual(near_h, 480 / 5, delta=3)
         self.assertLess(far_h, near_h)
 

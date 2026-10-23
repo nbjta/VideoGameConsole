@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from gamConsole.hand_pip_overlay import HandPipOverlay
-from gamConsole.house_build import HouseBuildScene
+from gamConsole.house_build import HouseBuildScene, apply_hand_input
 from gamConsole.opencv_ui import run_window_loop
 
 
@@ -100,17 +100,7 @@ def run_3d(camera: int) -> None:
         camera = cv2.flip(frame, 1)
         #8 Bjælken flytter sig kun mens hånden er klemt.
         track = hand_pip.read(camera)
-        if track is not None:
-            h, w = camera.shape[:2]
-            px, py = track.palm_norm
-            scene.steer(
-                camera.shape,
-                (int(px * w), int(py * h)),
-                holding=track.clenched,
-                landmarks=track.points,
-            )
-        else:
-            scene.steer(camera.shape, None)
+        apply_hand_input(scene, track, camera)
         scene.draw(frame)
         hand_pip.draw(frame, camera=camera)
         return frame

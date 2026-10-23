@@ -14,7 +14,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from gamConsole.hand_pip_overlay import hand_is_clenched  # noqa: E402
-from gamConsole.house_build import ConcreteFoundation, HOUSE_PLAN, HouseBuildScene, TimberBeam  # noqa: E402
+from gamConsole.house_build import (  # noqa: E402
+    ConcreteFoundation,
+    HOUSE_PLAN,
+    HouseBuildScene,
+    PlacedPiece,
+    TimberBeam,
+)
+from gamConsole.house_paint_assets import brush_sprite  # noqa: E402
+from gamConsole.house_tool_cards import ToolCardBar  # noqa: E402
 
 
 def _open_hand() -> list:
@@ -156,6 +164,41 @@ class HouseBuildTest(unittest.TestCase):
         self.assertLess(kinds.index("rim"), kinds.index("door"))
         self.assertLess(kinds.index("door"), kinds.index("window"))
         self.assertLess(kinds.index("window"), kinds.index("roof"))
+
+    def test_brush_png_loads(self) -> None:
+        bgr, mask = brush_sprite()
+        self.assertEqual(len(bgr.shape), 3)
+        self.assertGreater(int(mask.sum()), 0)
+
+    def test_tool_card_hit_in_top_bar(self) -> None:
+        bar = ToolCardBar()
+        w = 640
+        layouts = bar._layout(w)
+        x1, y1, x2, y2, _ = layouts[0]
+        self.assertEqual(bar.tool_at((x1 + x2) // 2, (y1 + y2) // 2, w), "hand")
+        x1, y1, x2, y2, card = layouts[1]
+        self.assertEqual(card.tool_id, "brush_red")
+        self.assertEqual(bar.tool_at((x1 + x2) // 2, (y1 + y2) // 2, w), "brush_red")
+        self.assertIsNone(bar.tool_at(100, 200, w))
+
+    def test_paint_only_on_placed_material(self) -> None:
+        scene = HouseBuildScene()
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        top, _ = scene.foundation.paint(frame)
+        scene._slab_top = top
+        scene.select_tool("brush_red")
+        cx, cy = _slab_point_from_top(top, 0.12, 0.14)
+        scene.placed.append(PlacedPiece(step=scene.steps[0]))
+        scene.paint_at_pixel(cx, cy)
+        self.assertEqual(len(scene.paint_dots), 1)
+        scene.paint_at_pixel(20, 20)
+        self.assertEqual(len(scene.paint_dots), 1)
+
+
+def _slab_point_from_top(top, u, v):
+    from gamConsole.house_build import _slab_point
+
+    return _slab_point(top, u, v)
 
 
 if __name__ == "__main__":
