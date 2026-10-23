@@ -60,7 +60,7 @@ class GamConsoleMenu:
         self._label(outer, "gamConsole", font=("Helvetica", 22, "bold")).pack(anchor=tk.W)
         self._label(
             outer,
-            "Vælg et webcam-spil. Bubble / 3D / VJ kræver CvGames fra webcam-games.",
+            "Vælg et webcam-spil. Bubble / 3D kræver CvGames fra webcam-games.",
             muted=True,
         ).pack(anchor=tk.W, pady=(0, 12))
 

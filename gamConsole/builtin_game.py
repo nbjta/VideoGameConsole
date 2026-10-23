@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import glob
-import math
 import sys
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
+from gamConsole.hand_pip_overlay import HandPipOverlay
+from gamConsole.house_build import HouseBuildScene
 from gamConsole.opencv_ui import run_window_loop
-
-DATA = Path(__file__).resolve().parents[1] / "vendor" / "webcam-games" / "Data"
 
 
 def _open_camera(index: int) -> cv2.VideoCapture:
@@ -89,115 +86,47 @@ def run_bub(camera: int) -> None:
     run_window_loop("gamConsole: bubble shot", cap, render)
 
 
-def _load_vj_images() -> List[np.ndarray]:
-    paths: List[str] = []
-    if DATA.is_dir():
-        for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp"):
-            paths.extend(glob.glob(str(DATA / ext)))
-    images: List[np.ndarray] = []
-    for p in sorted(paths)[:12]:
-        img = cv2.imread(p)
-        if img is not None:
-            images.append(img)
-    if not images:
-        for hue in range(0, 360, 45):
-            block = np.zeros((480, 640, 3), dtype=np.uint8)
-            block[:] = cv2.cvtColor(np.uint8([[[hue // 2, 200, 200]]]), cv2.COLOR_HSV2BGR)[0][0]
-            images.append(block)
-    return images
-
-
-def run_vj(camera: int) -> None:
-    cap = _open_camera(camera)
-    state: dict = {"prev": None, "idx": 0, "blend": 0.0, "images": _load_vj_images()}
-
-    def render():
-        ok, frame = cap.read()
-        if not ok:
-            return None
-        h, w = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (21, 21), 0)
-        mask, state["prev"] = _motion_mask(gray, state["prev"])
-        motion = float(np.count_nonzero(mask)) / mask.size
-        if motion > 0.02:
-            state["blend"] = min(1.0, state["blend"] + 0.04)
-        else:
-            state["blend"] = max(0.0, state["blend"] - 0.01)
-        if state["blend"] >= 0.98:
-            state["idx"] = (state["idx"] + 1) % len(state["images"])
-            state["blend"] = 0.0
-        overlay = cv2.resize(state["images"][state["idx"]], (w, h))
-        out = cv2.addWeighted(frame, 1.0 - state["blend"], overlay, state["blend"], 0)
-        cv2.putText(
-            out,
-            f"VJ lag {state['idx'] + 1}/{len(state['images'])}",
-            (10, 24),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
-        return out
-
-    run_window_loop("gamConsole: vj", cap, render)
-
-
-def _draw_cube(frame: np.ndarray, angle_x: float, angle_y: float) -> None:
-    h, w = frame.shape[:2]
-    cx, cy = w // 2, h // 2
-    s = min(w, h) // 6
-    pts = np.array(
-        [
-            [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-            [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
-        ],
-        dtype=float,
-    )
-    rx, ry = angle_x, angle_y
-    rot_x = np.array([[1, 0, 0], [0, math.cos(rx), -math.sin(rx)], [0, math.sin(rx), math.cos(rx)]])
-    rot_y = np.array([[math.cos(ry), 0, math.sin(ry)], [0, 1, 0], [-math.sin(ry), 0, math.cos(ry)]])
-    edges = [
-        (0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
-        (0, 4), (1, 5), (2, 6), (3, 7),
-    ]
-    projected = []
-    for p in pts:
-        v = rot_y @ rot_x @ (p * s)
-        projected.append((int(cx + v[0]), int(cy + v[1])))
-    for a, b in edges:
-        cv2.line(frame, projected[a], projected[b], (80, 180, 255), 2)
-
-
+#8
 def run_3d(camera: int) -> None:
     cap = _open_camera(camera)
-    state: dict = {"prev": None, "ax": 0.4, "ay": 0.4}
+    scene = HouseBuildScene()
+    hand_pip = HandPipOverlay()
 
     def render():
         ok, frame = cap.read()
         if not ok:
             return None
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (21, 21), 0)
-        mask, state["prev"] = _motion_mask(gray, state["prev"])
-        c = _motion_centroid(mask)
-        if c is not None:
-            h, w = frame.shape[:2]
-            state["ay"] = (c[0] / w - 0.5) * 3
-            state["ax"] = (c[1] / h - 0.5) * 3
-        _draw_cube(frame, state["ax"], state["ay"])
-        cv2.putText(frame, "Styr kube med bevægelse", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        #8 Spejlvendt webcam — samme styring som i gamConsole-menuen.
+        camera = cv2.flip(frame, 1)
+        #8 Bjælken flytter sig kun mens hånden er klemt.
+        track = hand_pip.read(camera)
+        if track is not None:
+            h, w = camera.shape[:2]
+            px, py = track.palm_norm
+            scene.steer(
+                camera.shape,
+                (int(px * w), int(py * h)),
+                holding=track.clenched,
+                landmarks=track.points,
+            )
+        else:
+            scene.steer(camera.shape, None)
+        scene.draw(frame)
+        hand_pip.draw(frame, camera=camera)
         return frame
 
-    run_window_loop("gamConsole: 3d", cap, render)
+    try:
+        run_window_loop("gamConsole: husbygning", cap, render)
+    finally:
+        hand_pip.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="gamConsole builtin webcam game")
-    parser.add_argument("mode", choices=("3d", "bub", "vj", "debug"))
+    parser.add_argument("mode", choices=("3d", "bub", "debug"))
     parser.add_argument("--camera", type=int, default=0)
     args = parser.parse_args()
-    runners = {"3d": run_3d, "bub": run_bub, "vj": run_vj, "debug": run_debug}
+    runners = {"3d": run_3d, "bub": run_bub, "debug": run_debug}
     runners[args.mode](args.camera)
 
 

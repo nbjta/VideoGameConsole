@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple
+import os
+from typing import Callable, Dict, Optional, Tuple
 
 import cv2
 
 QUIT_BAR_H = 44
 HOME_X1, HOME_Y1, HOME_X2, HOME_Y2 = 8, 8, 132, 44
+#3 Plads til spil-indhold mellem Hjem-knappen og LUK-bjælken.
+_content_wh: Tuple[int, int] = (960, 752)
 
 
 def window_was_closed(name: str) -> bool:
@@ -28,18 +31,10 @@ def key_requests_home(key: int) -> bool:
 
 
 def draw_home_button(frame) -> None:
-    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (60, 90, 140), -1)
-    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (120, 160, 220), 2)
-    cv2.putText(
-        frame,
-        "Hjem",
-        (HOME_X1 + 18, HOME_Y2 - 12),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.62,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
+    # BGR, så knappen tegnes blå. Tuplen (60, 90, 140) blev vist som brun.
+    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (170, 110, 60), -1)
+    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (220, 170, 130), 2)
+    draw_text(frame, "Hjem", (HOME_X1 + 16, HOME_Y1 + 6), scale=0.62, color=(255, 255, 255))
 
 
 def home_button_click(x: int, y: int) -> bool:
@@ -51,15 +46,12 @@ def draw_quit_bar(frame) -> None:
     y1 = h - QUIT_BAR_H
     cv2.rectangle(frame, (0, y1), (w, h), (50, 45, 70), -1)
     cv2.rectangle(frame, (8, y1 + 6), (w - 8, h - 6), (120, 70, 70), 2)
-    cv2.putText(
+    draw_text(
         frame,
-        "LUK konsol  —  klik her  eller  Q / Esc",
-        (20, h - 14),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (255, 230, 230),
-        1,
-        cv2.LINE_AA,
+        "LUK konsol - klik her eller Q / Esc",
+        (20, y1 + 10),
+        scale=0.55,
+        color=(230, 230, 255),
     )
 
 
@@ -67,18 +59,137 @@ def quit_bar_click(frame_height: int, y: int) -> bool:
     return y >= frame_height - QUIT_BAR_H
 
 
+#4 Hershey i cv2.putText har ikke ø/æ, så UTF-8 bliver til ??.
+_FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+)
+_font_cache: Dict[int, object] = {}
+
+
+def _load_font(px: int):
+    cached = _font_cache.get(px)
+    if cached is not None:
+        return cached
+    from PIL import ImageFont
+
+    for path in _FONT_CANDIDATES:
+        if not os.path.isfile(path):
+            continue
+        try:
+            font = ImageFont.truetype(path, px)
+        except OSError:
+            continue
+        _font_cache[px] = font
+        return font
+    font = ImageFont.load_default()
+    _font_cache[px] = font
+    return font
+
+
+def _text_bbox(text: str, scale: float) -> Tuple[int, int]:
+    from PIL import Image, ImageDraw
+
+    font = _load_font(max(12, int(round(32 * scale))))
+    probe = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    bbox = probe.textbbox((0, 0), text, font=font)
+    width = max(1, bbox[2] - bbox[0] + 2)
+    height = max(1, bbox[3] - bbox[1] + 2)
+    return width, height
+
+
+def measure_text(text: str, scale: float = 0.7) -> Tuple[int, int]:
+    if not text:
+        return 0, 0
+    return _text_bbox(text, scale)
+
+
+def draw_text_centered(
+    frame,
+    text: str,
+    center_x: int,
+    y: int,
+    scale: float = 0.7,
+    color: Tuple[int, int, int] = (234, 234, 234),
+) -> None:
+    width, _ = measure_text(text, scale)
+    draw_text(frame, text, (center_x - width // 2, y), scale=scale, color=color)
+
+
+def draw_text(
+    frame,
+    text: str,
+    origin: Tuple[int, int],
+    scale: float = 0.7,
+    color: Tuple[int, int, int] = (234, 234, 234),
+) -> None:
+    """Tegn Unicode-tekst. origin er øverste venstre hjørne, color er BGR."""
+    if not text:
+        return
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    font = _load_font(max(12, int(round(32 * scale))))
+    rgb = (int(color[2]), int(color[1]), int(color[0]), 255)
+    probe = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    bbox = probe.textbbox((0, 0), text, font=font)
+    width = max(1, bbox[2] - bbox[0] + 2)
+    height = max(1, bbox[3] - bbox[1] + 2)
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    ImageDraw.Draw(image).text((-bbox[0], -bbox[1]), text, font=font, fill=rgb)
+    sprite = np.asarray(image)
+    frame_h, frame_w = frame.shape[:2]
+    x, y = origin
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(frame_w, x + sprite.shape[1]), min(frame_h, y + sprite.shape[0])
+    if x2 <= x1 or y2 <= y1:
+        return
+    crop = sprite[y1 - y : y1 - y + (y2 - y1), x1 - x : x1 - x + (x2 - x1)]
+    alpha = crop[:, :, 3:4].astype(np.float32) / 255.0
+    bgr = crop[:, :, 2::-1].astype(np.float32)
+    roi = frame[y1:y2, x1:x2].astype(np.float32)
+    frame[y1:y2, x1:x2] = (bgr * alpha + roi * (1.0 - alpha)).astype(np.uint8)
+
+
 def overlay_game_chrome(frame, title: str) -> None:
     draw_home_button(frame)
-    cv2.putText(
-        frame,
-        title,
-        (HOME_X2 + 12, HOME_Y2 - 12),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.62,
-        (240, 240, 240),
-        2,
-        cv2.LINE_AA,
-    )
+    draw_text(frame, title, (HOME_X2 + 10, HOME_Y1 + 6), scale=0.62, color=(240, 240, 240))
+
+
+def set_content_size(width: int, height: int) -> None:
+    global _content_wh
+    _content_wh = (max(1, width), max(1, height))
+
+
+def content_size() -> Tuple[int, int]:
+    return _content_wh
+
+
+def window_content_height(preferred: int, visible_height: Optional[int] = None) -> int:
+    """Højde som kan stå på skærmen sammen med vinduets titelbjælke.
+
+    Målt på denne Mac: synlig højde 796 pt, mens menuen bad om 840.
+    De nederste pixels, inklusive LUK-teksten, lå derfor under Dock.
+    """
+    if visible_height is None:
+        visible_height = _macos_visible_height()
+    if not visible_height:
+        return preferred
+    return max(640, min(preferred, int(visible_height) - 36))
+
+
+def _macos_visible_height() -> Optional[int]:
+    try:
+        from AppKit import NSScreen
+
+        screen = NSScreen.mainScreen()
+        if screen is None:
+            return None
+        return int(screen.visibleFrame().size.height)
+    except Exception:
+        return None
 
 
 def fit_frame(frame, width: int, height: int):
@@ -88,11 +199,15 @@ def fit_frame(frame, width: int, height: int):
     fh, fw = frame.shape[:2]
     if fh == 0 or fw == 0:
         return canvas
-    scale = min(width / fw, (height - QUIT_BAR_H) / fh)
-    nw, nh = max(1, int(fw * scale)), max(1, int(fh * scale))
+    top = HOME_Y2
+    bottom = max(top + 1, height - QUIT_BAR_H)
+    avail_h = bottom - top
+    scale = min(width / fw, avail_h / fh)
+    nw = max(1, min(width, int(fw * scale)))
+    nh = max(1, min(avail_h, int(fh * scale)))
     resized = cv2.resize(frame, (nw, nh))
     x0 = (width - nw) // 2
-    y0 = (height - QUIT_BAR_H - nh) // 2 + HOME_Y2
+    y0 = top + (avail_h - nh) // 2
     canvas[y0 : y0 + nh, x0 : x0 + nw] = resized
     return canvas
 

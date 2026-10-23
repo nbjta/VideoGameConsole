@@ -7,10 +7,19 @@ from typing import Optional, Protocol, Tuple, Union
 from gamConsole.builtin_sessions import BuiltinSession
 from gamConsole.flying_users_session import FlyingUsersSession
 from gamConsole.games_registry import GameEntry
-from gamConsole.jdwebcam_session import JDWebcamSession
+from gamConsole.handora_session import HandoraSession
 from gamConsole.just_dance_session import JustDanceSession
+from gamConsole.tilt_of_time_session import TiltOfTimeSession
+from gamConsole.wiisports_session import WiiSportsSession
 
-GameSession = Union[BuiltinSession, FlyingUsersSession, JustDanceSession, JDWebcamSession]
+GameSession = Union[
+    BuiltinSession,
+    FlyingUsersSession,
+    HandoraSession,
+    JustDanceSession,
+    TiltOfTimeSession,
+    WiiSportsSession,
+]
 
 
 class SessionProtocol(Protocol):
@@ -24,16 +33,20 @@ class SessionProtocol(Protocol):
 
 
 def create_session(entry: GameEntry, camera: int) -> Tuple[Optional[GameSession], str]:
+    #6
+    if entry.launcher == "handora":
+        session = HandoraSession(camera)
+        return session, session.message
+    #3
+    if entry.launcher == "wiisports":
+        session = WiiSportsSession(camera)
+        return session, session.message
     if entry.launcher == "just_dance":
         return JustDanceSession(entry.mode_arg or "cheapthrills", camera), "Just Dance klar."
-    if entry.launcher == "jdwebcam":
-        from gamConsole.jdwebcam_launcher import launch as launch_jdwebcam
-
-        ok, msg = launch_jdwebcam()
-        session = JDWebcamSession(camera)
-        if not ok:
-            return session, msg
-        return session, msg + " Preview i gamConsole — Hjem for menu."
+    #2
+    if entry.launcher == "tilt_of_time":
+        session = TiltOfTimeSession(camera)
+        return session, session.message
     if entry.launcher == "builtin" and entry.mode_arg == "flying_users":
         return FlyingUsersSession(camera), f"{entry.title} klar."
     if entry.launcher == "builtin" or entry.launcher == "cvgames":

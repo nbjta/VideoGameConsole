@@ -9,16 +9,17 @@ class GameEntry:
     description: str
     mode_arg: Optional[str]  # CvGames / builtin mode, eller ekstern nøgle
     source_url: str
-    launcher: str = "cvgames"  # cvgames | builtin | just_dance | jdwebcam
+    launcher: str = "cvgames"  # cvgames | builtin | just_dance | tilt_of_time | wiisports | handora
 
 
 WEBCAM_GAMES_REPO = "https://github.com/aurelijusb/webcam-games"
 
 GAMES: List[GameEntry] = [
+    #8
     GameEntry(
         id="webcam-3d",
-        title="3D rotation",
-        description="Rotér 3D-objekter med kamerabevægelse (OpenCV + OpenGL).",
+        title="Husbygning",
+        description="Sæt stolper, modulvægge, toprem, døre, vinduer og tag på spøgelses-mærkerne.",
         mode_arg="3d",
         source_url=WEBCAM_GAMES_REPO,
     ),
@@ -30,13 +31,6 @@ GAMES: List[GameEntry] = [
         source_url=WEBCAM_GAMES_REPO,
     ),
     GameEntry(
-        id="webcam-vj",
-        title="WebCam VJ",
-        description="Motion-baseret billed-fading.",
-        mode_arg="vj",
-        source_url=WEBCAM_GAMES_REPO,
-    ),
-    GameEntry(
         id="webcam-debug",
         title="Debug view",
         description="Viser hvordan tracking virker internt.",
@@ -45,8 +39,8 @@ GAMES: List[GameEntry] = [
     ),
     GameEntry(
         id="flying-users-ar",
-        title="Flyvende brugere (AR)",
-        description="Kast burgere med armen. Brugere flyver imod dig i webcam-AR.",
+        title="Humdingers killinger (AR)",
+        description="Kast burgere efter Humdingers killinger i en bevægelig cartoon-by.",
         mode_arg="flying_users",
         source_url="https://github.com/nbjta/VideoGameConsole",
         launcher="builtin",
@@ -59,13 +53,32 @@ GAMES: List[GameEntry] = [
         source_url="https://github.com/olincollege/just-dance",
         launcher="just_dance",
     ),
+    #2
     GameEntry(
-        id="jdwebcam",
-        title="JDWebcam controller",
-        description="Webcam som virtuel controller til Just Dance 2017 PC (ikke et spil i sig selv).",
-        mode_arg=None,
-        source_url="https://github.com/comeraperuibe944/JDWebcam",
-        launcher="jdwebcam",
+        id="tilt-of-time",
+        title="Tilt of Time",
+        description="Vip hovedet og fang kultur-ikoner med webcam.",
+        mode_arg="tilt",
+        source_url="https://github.com/ebinrajiiit/Tilt_of_Time",
+        launcher="tilt_of_time",
+    ),
+    #3
+    GameEntry(
+        id="wiisports",
+        title="Nostalgia AR",
+        description="Bordtennis og frugt med webcam i browseren.",
+        mode_arg="lobby",
+        source_url="https://github.com/devgaddebuilds/wiisports",
+        launcher="wiisports",
+    ),
+    #6
+    GameEntry(
+        id="handora",
+        title="Handora",
+        description="Hånd, ansigt og krop. Laser og Hit-The-Ball i browseren.",
+        mode_arg="hand_gesture",
+        source_url="https://github.com/BOSS294/Handora",
+        launcher="handora",
     ),
 ]
 

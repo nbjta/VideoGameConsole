@@ -27,9 +27,8 @@ Projektet er C++11 med OpenCV, OpenGL og GLUT. README i upstream nævner `bob`, 
 
 | Menu | CvGames mode |
 |------|----------------|
-| 3D rotation | `3d` |
+| Husbygning | `3d` |
 | Bubble shot | `bub` |
-| WebCam VJ | `vj` |
 | Debug view | `debug` |
 
 Installér og byg:
@@ -64,17 +63,52 @@ Test uden menu:
 
 - `gamConsole/` — Tk-menu, webcam-preview, launcher
 - `vendor/webcam-games/` — clone (oprettes af setup-script)
+- `vendor/tilt-of-time/` — clone af Tilt of Time
+- `vendor/handora/` — clone af Handora
 - `scripts/setup_webcam_games.sh` — clone + `make`
+- `scripts/setup_tilt_of_time.sh` — clone + MediaPipe
+- `scripts/setup_handora.sh` — clone af Handora
+
+## Tilt of Time
+
+[Tilt of Time](https://github.com/ebinrajiiit/Tilt_of_Time) er et MIT-licenseret webcam-spil fra [emnet webcam-game](https://github.com/topics/webcam-game). Vip hovedet for at fange faldende ikoner. Det kører i **eget OpenCV-vindue**, fordi upstream lukker alle OpenCV-vinduer når spillet slutter.
+
+```bash
+./scripts/setup_tilt_of_time.sh
+```
+
+Setup installerer MediaPipe. Den pakke trækker `opencv-contrib-python` 5 med ind, som erstatter `cv2`. Scriptet fjerner den igen og lægger `opencv-python` 4.x tilbage. MediaPipe virker med OpenCV 4.14. Uden MediaPipe falder spillet selv tilbage til OpenCV-ansigtsgenkendelse.
+
+Spillet åbner altid kamera 0 i upstream. Menuens kamera-index sendes med, når det ikke er 0.
+
+## Nostalgia AR (wiisports)
+
+[Nostalgia AR](https://github.com/devgaddebuilds/wiisports) er browser-arkaden fra [emnet webcam-game](https://github.com/topics/webcam-game): bordtennis og frugtskæring styret med hænderne. Repoet har ingen LICENSE-fil. Basketball i samme repo er ikke med i deres lobby, så menuen starter den ikke.
+
+```bash
+./scripts/setup_wiisports.sh
+```
+
+Menuen starter tre Vite-servere og åbner lobbyen i et WebKit-vindue i gamConsole på `http://127.0.0.1:5180/`. Adressen sættes direkte i vinduet. Deres PLAY-knapper går til bordtennis på port 5173 og frugt på port 5174. Uden de lokale adresser peger lobbyen på `/pingpong/` og `/fruit/`, som giver 404. Lobbyen starter uden Supabase. Sign In og Leaderboard virker først, når `VITE_SUPABASE_URL` og `VITE_SUPABASE_ANON_KEY` står i `vendor/wiisports/nostalgia-ar/.env.local`. **Hjem** lukker browseren og stopper serverne. Siden beder selv om kamera via `getUserMedia` uden `deviceId`, og gamConsole godkender den forespørgsel. macOS kan stadig vise sin egen kamera-dialog første gang.
+
+## Handora
+
+[Handora](https://github.com/BOSS294/Handora) er en browser-side med hånd, ansigt og krop via MediaPipe. Laser og Hit-The-Ball åbnes med **Open Games** inde i siden. Repoet har ingen LICENSE-fil. `alert-beep.mp3` og `alarm-siren.mp3` står i HTML, men ligger ikke i repoet, så de to lyde giver 404.
+
+```bash
+./scripts/setup_handora.sh
+```
+
+Menuen starter `python -m http.server` på `http://127.0.0.1:5190/modules/hand_gesture/index.html` og åbner siden i gamConsole-browseren. **Hjem** lukker browseren og stopper serveren. Siden beder selv om kamera, når man trykker **Start Camera**. MediaPipe-modellerne hentes fra jsDelivr, så internet skal være tændt. Menuens kamera-index sendes ikke med, fordi siden kalder `getUserMedia` uden `deviceId`.
 
 ## Just Dance (plan)
 
-Se [docs/JUST_DANCE.md](docs/JUST_DANCE.md) for vurdering af [JDWebcam](https://github.com/comeraperuibe944/JDWebcam) og [olincollege/just-dance](https://github.com/olincollege/just-dance).
+Se [docs/JUST_DANCE.md](docs/JUST_DANCE.md) for vurdering af [olincollege/just-dance](https://github.com/olincollege/just-dance).
 
 ```bash
 ./scripts/setup_just_dance.sh   # fuldt spil (tungt)
-./scripts/setup_jdwebcam.sh       # controller til JD 2017 PC
 ```
 
 ## Licens
 
-Menu-kode: MIT. Webcam-games: MIT (upstream).
+Menu-kode: MIT. Webcam-games og Tilt of Time: MIT (upstream).

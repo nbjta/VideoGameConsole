@@ -1,4 +1,4 @@
-"""Webcam-AR: brugere flyver imod spilleren i live-kameraet."""
+"""Webcam-AR: kast burgere efter flyvende killinger i en cartoon-by."""
 
 from __future__ import annotations
 
@@ -11,73 +11,10 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
+from gamConsole.adventure_city import AdventureCityBackdrop, StreetKitten, _road_layout
 from gamConsole.opencv_ui import run_window_loop
-
-HAAR_FACE = "haarcascade_frontalface_default.xml"
-
-
-class AREntity:
-    """Objekt i AR-rum foran webcam: z=1 er langt væk, z→0 er tæt på spilleren."""
-
-    def __init__(self, x_n: float, y_n: float, z: float, speed: float) -> None:
-        self.x_n = x_n
-        self.y_n = y_n
-        self.z = z
-        self.speed = speed
-
-    def tick(self) -> None:
-        self.z -= self.speed
-
-    @property
-    def reached_player(self) -> bool:
-        return self.z <= 0.10
-
-    def project(self, frame_w: int, frame_h: int) -> Tuple[int, int, int]:
-        z = max(self.z, 0.06)
-        px = int(frame_w * 0.5 + self.x_n * (frame_w * 0.42) / z)
-        py = int(frame_h * 0.42 + self.y_n * (frame_h * 0.30) / z)
-        radius = int(min(frame_w, frame_h) * 0.11 / z)
-        return px, py, max(6, radius)
-
-    def draw(self, frame: np.ndarray) -> None:
-        raise NotImplementedError
-
-
-class FlyingUser(AREntity):
-    """En bruger der flyver imod webcam-spilleren."""
-
-    def __init__(
-        self,
-        x_n: float,
-        y_n: float,
-        z: float,
-        speed: float,
-        user_id: int,
-        color: Tuple[int, int, int],
-        face: Optional[np.ndarray],
-    ) -> None:
-        super().__init__(x_n, y_n, z, speed)
-        self.user_id = user_id
-        self.color = color
-        self.face = face
-        self.name = f"User {user_id}"
-
-    def draw(self, frame: np.ndarray) -> None:
-        px, py, radius = self.project(frame.shape[1], frame.shape[0])
-        sprite = self.face if self.face is not None else make_user_avatar(self.color)
-        blit_circle(frame, sprite, px, py, radius)
-        cv2.circle(frame, (px, py), radius, self.color, 2, cv2.LINE_AA)
-        label_y = min(frame.shape[0] - 8, py + radius + 18)
-        cv2.putText(
-            frame,
-            self.name,
-            (max(8, px - radius), label_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
+from gamConsole.overhead_branches import OverheadBranch, draw_branch_warning, reset_branches
+from gamConsole.ar_player_view import ARPlayerView
 
 
 @dataclass
@@ -150,95 +87,43 @@ class ArmThrowDetector:
         return (cx, cy), energy
 
 
-class ThrownBurger(AREntity):
-    """Burger kastet af spilleren, flyver væk fra kameraet imod brugerne."""
+class ThrownBurger:
+    """Burger der flyver hen mod gaden, hvor killingerne løber."""
 
-    def __init__(
-        self,
-        x_n: float,
-        y_n: float,
-        z: float,
-        speed: float,
-        vx: float,
-        vy: float,
-    ) -> None:
-        super().__init__(x_n, y_n, z, speed)
+    def __init__(self, x: float, y: float, vx: float, vy: float) -> None:
+        self.x = x
+        self.y = y
         self.vx = vx
         self.vy = vy
+        self.age = 0
 
     @classmethod
     def from_throw(cls, event: ThrowEvent, frame_w: int, frame_h: int) -> ThrownBurger:
-        z = 0.16
-        x_n = (event.x_px - frame_w * 0.5) * z / (frame_w * 0.42)
-        y_n = (event.y_px - frame_h * 0.42) * z / max(frame_h * 0.30, 1.0)
-        return cls(
-            x_n=x_n,
-            y_n=y_n,
-            z=z,
-            speed=0.038,
-            vx=event.dx / frame_w * 0.10,
-            vy=event.dy / frame_h * 0.10,
-        )
+        _horizon, road_top, _vx, _vy, _hh, _hn = _road_layout(frame_h, frame_w)
+        road_y = float(road_top)
+        vx = event.dx * 0.28
+        if abs(vx) < 5:
+            vx = -9.0 if event.x_px > frame_w / 2 else 9.0
+        vy = max(7.0, (road_y - event.y_px) / 16.0)
+        return cls(float(event.x_px), float(event.y_px), vx, vy)
 
     def tick(self) -> None:
-        self.z += self.speed
-        self.x_n += self.vx
-        self.y_n += self.vy
+        self.x += self.vx
+        self.y += self.vy
+        self.age += 1
 
-    @property
-    def missed(self) -> bool:
-        return self.z >= 1.15
+    def missed(self, frame_w: int, frame_h: int) -> bool:
+        return self.y > frame_h * 0.84 or self.x < -50 or self.x > frame_w + 50 or self.age > 55
 
-    def project(self, frame_w: int, frame_h: int) -> Tuple[int, int, int]:
-        z = max(self.z, 0.06)
-        px = int(frame_w * 0.5 + self.x_n * (frame_w * 0.42) / z)
-        py = int(frame_h * 0.42 + self.y_n * (frame_h * 0.30) / z)
-        radius = int(min(frame_w, frame_h) * 0.055 / z)
-        return px, py, max(8, radius)
+    def radius(self) -> int:
+        return max(10, int(22 - self.age * 0.22))
 
-    def hits(self, user: FlyingUser, frame_w: int, frame_h: int) -> bool:
-        bx, by, br = self.project(frame_w, frame_h)
-        ux, uy, ur = user.project(frame_w, frame_h)
-        return math.hypot(bx - ux, by - uy) < (br + ur) * 0.72
+    def hits_xy(self, cx: int, cy: int, radius: int) -> bool:
+        return math.hypot(self.x - cx, self.y - cy) < (self.radius() + radius) * 0.78
 
     def draw(self, frame: np.ndarray) -> None:
-        px, py, radius = self.project(frame.shape[1], frame.shape[0])
-        blit_circle(frame, burger_sprite(), px, py, radius)
-        cv2.circle(frame, (px, py), radius, (40, 90, 200), 2, cv2.LINE_AA)
-
-
-class FaceBank:
-    """Gemmer ansigter fra webcam, så flyvende brugere ligner rigtige personer."""
-
-    def __init__(self) -> None:
-        path = getattr(cv2, "data", None)
-        cascade_path = f"{path.haarcascades}{HAAR_FACE}" if path is not None else HAAR_FACE
-        self._cascade = cv2.CascadeClassifier(cascade_path)
-        self._faces: List[np.ndarray] = []
-        self._frame_i = 0
-
-    def sample(self, frame: np.ndarray) -> None:
-        self._frame_i += 1
-        if self._frame_i % 8 != 0:
-            return
-        if self._cascade.empty():
-            return
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        boxes = self._cascade.detectMultiScale(gray, 1.2, 4, minSize=(48, 48))
-        for x, y, w, h in boxes:
-            pad = int(0.12 * max(w, h))
-            x1, y1 = max(0, x - pad), max(0, y - pad)
-            x2, y2 = min(frame.shape[1], x + w + pad), min(frame.shape[0], y + h + pad)
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-            self._faces.append(crop.copy())
-        self._faces = self._faces[-6:]
-
-    def pick(self, rng: np.random.Generator) -> Optional[np.ndarray]:
-        if not self._faces:
-            return None
-        return self._faces[int(rng.integers(0, len(self._faces)))].copy()
+        blit_circle(frame, burger_sprite(), int(self.x), int(self.y), self.radius())
+        cv2.circle(frame, (int(self.x), int(self.y)), self.radius(), (40, 90, 200), 2, cv2.LINE_AA)
 
 
 class WebcamARGame:
@@ -273,23 +158,24 @@ class WebcamARGame:
 
 
 class FlyingUsersARGame(WebcamARGame):
-    """Live webcam som AR-verden: brugere flyver imod spilleren."""
+    """Kast burgere efter Humdingers killinger i webcam-AR."""
 
-    window_name = "gamConsole: flyvende brugere"
+    window_name = "gamConsole: Humdingers killinger"
 
     def __init__(self, camera: int) -> None:
         super().__init__(camera)
         self.rng = np.random.default_rng()
-        self.faces = FaceBank()
-        self.users: List[FlyingUser] = []
         self.burgers: List[ThrownBurger] = []
         self.throw_detector = ArmThrowDetector()
+        self.city = AdventureCityBackdrop()
+        self.player = ARPlayerView()
         self.prev_gray: Optional[np.ndarray] = None
-        self.next_user_id = 1
+        self.next_kitten_id = 5
         self.score = 0
         self.lives = 5
-        self.spawn_in = 20
         self.hit_flashes: List[Tuple[int, int, int, int]] = []
+        self.branches: List[OverheadBranch] = reset_branches(0)
+        self.branch_spawn_cooldown = 90
         self.game_over = False
 
     def on_key(self, key: int) -> None:
@@ -297,22 +183,28 @@ class FlyingUsersARGame(WebcamARGame):
             self._reset()
 
     def _reset(self) -> None:
-        self.users = []
         self.burgers = []
         self.throw_detector.reset()
+        self.city.reset_kittens()
         self.score = 0
         self.lives = 5
-        self.spawn_in = 20
         self.hit_flashes = []
         self.game_over = False
-        self.next_user_id = 1
+        self.next_kitten_id = 5
+        self.branches = reset_branches(0)
+        self.branch_spawn_cooldown = 90
+
+    @property
+    def kittens(self) -> List[StreetKitten]:
+        return self.city.kittens
 
     def on_frame(self, frame: np.ndarray) -> np.ndarray:
         frame = cv2.flip(frame, 1)
         if self.game_over:
-            return self._draw_game_over(frame)
+            self.city.tick()
+            scene = self.player.composite(frame, self.city.render(frame.shape[1], frame.shape[0]))
+            return self._draw_game_over(scene)
 
-        self.faces.sample(frame)
         mask, self.prev_gray = motion_mask(frame, self.prev_gray)
         throw = self.throw_detector.detect(mask)
         if throw is not None and len(self.burgers) < 8:
@@ -320,56 +212,97 @@ class FlyingUsersARGame(WebcamARGame):
             self.burgers.append(burger)
             self.hit_flashes.append((throw.x_px, throw.y_px, 18, 8))
 
-        self.spawn_in -= 1
-        if self.spawn_in <= 0 and len(self.users) < 8:
-            self.users.append(self._spawn_user())
-            self.spawn_in = max(18, 48 - self.score // 40)
-
         h, w = frame.shape[:2]
+        self.player.refresh_pose(frame)
+        self.city.tick()
+        self._tick_branches(frame, w, h)
         for burger in self.burgers:
             burger.tick()
-        self.burgers = [b for b in self.burgers if not b.missed]
+        self.burgers = [b for b in self.burgers if not b.missed(w, h)]
 
-        alive_users: List[FlyingUser] = []
-        for user in self.users:
-            user.tick()
-            px, py, radius = user.project(w, h)
-            if user.reached_player:
+        for kitten in list(self.city.kittens):
+            if kitten.wrapped(self.city.t, w):
+                cx, cy, radius = kitten.hitbox(self.city.t, w, h)
                 self.lives -= 1
-                self.hit_flashes.append((px, py, radius, 10))
+                self.hit_flashes.append((cx, cy, radius, 10))
                 if self.lives <= 0:
                     self.game_over = True
-                continue
-            hit_by = next((b for b in self.burgers if b.hits(user, w, h)), None)
-            if hit_by is not None:
-                self.score += 10 + int(40 * (1.0 - user.z))
-                self.hit_flashes.append((px, py, radius, 12))
-                self.burgers = [b for b in self.burgers if b is not hit_by]
-                continue
-            alive_users.append(user)
-        self.users = alive_users
 
-        drawables: List[AREntity] = list(self.users) + list(self.burgers)
-        drawables.sort(key=lambda e: e.z, reverse=True)
-        for entity in drawables:
-            entity.draw(frame)
-        self._draw_flashes(frame)
-        self._draw_hud(frame)
-        return frame
+        for burger in list(self.burgers):
+            hit = None
+            for kitten in self.city.kittens:
+                cx, cy, radius = kitten.hitbox(self.city.t, w, h)
+                if burger.hits_xy(cx, cy, radius):
+                    hit = kitten
+                    break
+            if hit is None:
+                continue
+            cx, cy, radius = hit.hitbox(self.city.t, w, h)
+            self.score += 10
+            self.hit_flashes.append((cx, cy, radius, 12))
+            self.burgers = [b for b in self.burgers if b is not burger]
+            self.city.kittens = [k for k in self.city.kittens if k is not hit]
+            self.city.kittens.append(self._spawn_kitten())
 
-    def _spawn_user(self) -> FlyingUser:
-        color = tuple(int(v) for v in self.rng.integers(70, 255, size=3))
-        user = FlyingUser(
-            x_n=float(self.rng.uniform(-0.55, 0.55)),
-            y_n=float(self.rng.uniform(-0.35, 0.45)),
-            z=1.0,
-            speed=float(self.rng.uniform(0.007, 0.016)),
-            user_id=self.next_user_id,
-            color=color,
-            face=self.faces.pick(self.rng),
+        scene = self.player.composite(frame, self.city.render(w, h))
+        for burger in self.burgers:
+            burger.draw(scene)
+        self._draw_branches(scene)
+        self._draw_flashes(scene)
+        self._draw_hud(scene)
+        return scene
+
+    def _tick_branches(self, frame: np.ndarray, w: int, h: int) -> None:
+        t = self.city.t
+        for branch in list(self.branches):
+            if branch.threatens_center(t, w) and not branch.hit:
+                clearance = branch.clearance_y(h)
+                if not self.player.is_ducked_under(frame, clearance):
+                    branch.hit = True
+                    self.lives -= 1
+                    self.hit_flashes.append((w // 2, clearance + 20, 40, 14))
+                    if self.lives <= 0:
+                        self.game_over = True
+        self.branches = [b for b in self.branches if not b.passed(t, w)]
+        if self.branch_spawn_cooldown > 0:
+            self.branch_spawn_cooldown -= 1
+        elif len(self.branches) < 1:
+            self.branches.append(self._spawn_branch())
+            self.branch_spawn_cooldown = int(self.rng.integers(110, 190))
+
+    def _spawn_branch(self) -> OverheadBranch:
+        branch = OverheadBranch(
+            phase=0.0,
+            speed=0.0,
+            enter_from_left=True,
+            low_y_ratio=float(self.rng.uniform(0.20, 0.26)),
         )
-        self.next_user_id += 1
-        return user
+        branch.start_t = self.city.t
+        return branch
+
+    def _draw_branches(self, scene: np.ndarray) -> None:
+        t = self.city.t
+        w = scene.shape[1]
+        for branch in self.branches:
+            if branch.threatens_center(t, w):
+                draw_branch_warning(scene, branch.clearance_y(scene.shape[0]))
+            branch.draw(scene, t)
+
+    def _spawn_kitten(self) -> StreetKitten:
+        idx = self.next_kitten_id - 1
+        enter_from_left = bool(self.rng.integers(0, 2))
+        kitten = StreetKitten(
+            phase=0.0,
+            speed=float(self.rng.uniform(1.5, 2.3)),
+            lane=idx % 2,
+            kitten_id=self.next_kitten_id,
+            fur=StreetKitten.FUR[idx % len(StreetKitten.FUR)],
+            helmet=StreetKitten.HELMETS[idx % len(StreetKitten.HELMETS)],
+            enter_from_left=enter_from_left,
+        )
+        kitten.start_t = self.city.t
+        self.next_kitten_id += 1
+        return kitten
 
     def _draw_flashes(self, frame: np.ndarray) -> None:
         next_flashes = []
@@ -382,7 +315,7 @@ class FlyingUsersARGame(WebcamARGame):
     def _draw_hud(self, frame: np.ndarray) -> None:
         cv2.putText(
             frame,
-            "AR  —  flyvende brugere",
+            "Humdingers killinger",
             (12, 28),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -402,7 +335,7 @@ class FlyingUsersARGame(WebcamARGame):
         )
         cv2.putText(
             frame,
-            "Kast med armen for at kaste burgere",
+            "Kast burgere - buk dig under grenen",
             (12, 82),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -461,15 +394,11 @@ def burger_sprite() -> np.ndarray:
     return _BURGER_SPRITE
 
 
-def make_user_avatar(color: Tuple[int, int, int]) -> np.ndarray:
-    img = np.full((128, 128, 3), (28, 28, 40), dtype=np.uint8)
-    cv2.circle(img, (64, 46), 28, color, -1, cv2.LINE_AA)
-    cv2.circle(img, (54, 42), 5, (255, 255, 255), -1, cv2.LINE_AA)
-    cv2.circle(img, (74, 42), 5, (255, 255, 255), -1, cv2.LINE_AA)
-    cv2.circle(img, (54, 43), 2, (25, 25, 25), -1, cv2.LINE_AA)
-    cv2.circle(img, (74, 43), 2, (25, 25, 25), -1, cv2.LINE_AA)
-    cv2.ellipse(img, (64, 54), (10, 6), 0, 15, 165, (40, 40, 50), 2, cv2.LINE_AA)
-    cv2.ellipse(img, (64, 112), (38, 30), 0, 180, 360, color, -1, cv2.LINE_AA)
+def make_kitten_sprite(fur: Tuple[int, int, int], helmet: Tuple[int, int, int]) -> np.ndarray:
+    from gamConsole.adventure_city import draw_kitten_side
+
+    img = np.full((80, 96, 3), (22, 22, 30), dtype=np.uint8)
+    draw_kitten_side(img, 48, 72, fur, helmet, 0.0)
     return img
 
 
@@ -499,7 +428,7 @@ def blit_circle(dst: np.ndarray, src: np.ndarray, cx: int, cy: int, radius: int)
 def motion_mask(frame: np.ndarray, prev: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (21, 21), 0)
-    if prev is None:
+    if prev is None or prev.shape != gray.shape:
         return np.zeros_like(gray), gray
     diff = cv2.absdiff(gray, prev)
     _, mask = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
@@ -507,7 +436,7 @@ def motion_mask(frame: np.ndarray, prev: Optional[np.ndarray]) -> Tuple[np.ndarr
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="gamConsole AR: flyvende brugere")
+    parser = argparse.ArgumentParser(description="gamConsole AR: burgere vs killinger")
     parser.add_argument("--camera", type=int, default=0)
     args = parser.parse_args()
     FlyingUsersARGame(args.camera).run()

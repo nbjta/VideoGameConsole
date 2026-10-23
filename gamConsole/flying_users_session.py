@@ -1,4 +1,4 @@
-"""Flyvende brugere AR som indlejret session (ændrer ikke flying_users_ar.py)."""
+"""Humdingers killinger AR som indlejret session."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from gamConsole.flying_users_ar import FlyingUsersARGame
 
 
 class FlyingUsersSession:
-    title = "Flyvende brugere (AR)"
+    title = "Humdingers killinger (AR)"
 
     def __init__(self, camera: int) -> None:
         self.game = FlyingUsersARGame(camera)

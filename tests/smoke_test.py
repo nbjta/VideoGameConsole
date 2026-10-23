@@ -17,11 +17,14 @@ from gamConsole.webcam_preview import WebcamPreview  # noqa: E402
 
 class SmokeTest(unittest.TestCase):
     def test_game_registry(self) -> None:
-        self.assertGreaterEqual(len(GAMES), 7)
+        self.assertGreaterEqual(len(GAMES), 8)
         ids = {g.id for g in GAMES}
         self.assertIn("just-dance", ids)
-        self.assertIn("jdwebcam", ids)
         self.assertIn("flying-users-ar", ids)
+        self.assertIn("tilt-of-time", ids)
+        self.assertIn("wiisports", ids)
+        #6
+        self.assertIn("handora", ids)
 
     def test_webcam_preview_import(self) -> None:
         preview = WebcamPreview(0)
