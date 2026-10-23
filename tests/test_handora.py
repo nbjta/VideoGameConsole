@@ -30,7 +30,10 @@ from gamConsole.menu_opencv import _compose_menu  # noqa: E402
 from gamConsole.opencv_ui import (  # noqa: E402
     HOME_Y2,
     QUIT_BAR_H,
+    close_button_rect,
+    draw_quit_bar,
     fit_frame,
+    quit_bar_click,
     set_content_size,
 )
 
@@ -81,6 +84,29 @@ class HandoraMenuTest(unittest.TestCase):
             finally:
                 server.stop()
             self.assertFalse(port_is_open(port))
+
+    def test_menu_edges_stay_clear_and_the_cross_closes(self) -> None:
+        games = games_for_menu()
+        selected = next(i for i, game in enumerate(games) if game.id == "handora")
+        webcam = np.full((480, 640, 3), (40, 80, 120), dtype=np.uint8)
+        canvas, _layout = _compose_menu(webcam, games, selected, None, False, 0)
+        self.assertTrue(np.array_equal(canvas[8, 8], webcam[0, 0]))
+        self.assertTrue(np.array_equal(canvas[-8, 8], webcam[0, 0]))
+        draw_quit_bar(canvas)
+        x1, y1, x2, y2 = close_button_rect(canvas.shape[1])
+        self.assertTrue(quit_bar_click(canvas.shape[1], (x1 + x2) // 2, (y1 + y2) // 2))
+        self.assertFalse(quit_bar_click(canvas.shape[1], 8, 8))
+        self.assertFalse(np.array_equal(canvas[(y1 + y2) // 2, (x1 + x2) // 2], webcam[0, 0]))
+
+    def test_selected_card_is_light_blue(self) -> None:
+        games = games_for_menu()
+        selected = next(i for i, game in enumerate(games) if game.id == "handora")
+        webcam = np.full((480, 640, 3), (160, 160, 160), dtype=np.uint8)
+        canvas, layout = _compose_menu(webcam, games, selected, None, False, 0)
+        card = next(box for box in layout.card_boxes if box.game_index == selected)
+        pixel = canvas[card.y2 - 10, (card.x1 + card.x2) // 2]
+        self.assertGreater(int(pixel[0]), int(pixel[2]) + 30)
+        self.assertGreater(int(pixel[0]), 180)
 
     def test_menu_card_stays_above_quit_bar(self) -> None:
         import gamConsole.menu_opencv as menu

@@ -5,6 +5,7 @@ Original tegning — ikke officiel PAW Patrol-kunst eller -figurer.
 
 from __future__ import annotations
 
+import time
 from typing import List, Optional, Tuple
 
 import cv2
@@ -70,8 +71,43 @@ class StreetActor:
         raise NotImplementedError
 
 
+def _tone(color: Color, factor: float) -> Color:
+    blue, green, red = color
+    return (
+        int(max(0, min(255, blue * factor))),
+        int(max(0, min(255, green * factor))),
+        int(max(0, min(255, red * factor))),
+    )
+
+
+def _fill_round_rect(
+    canvas: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    color: Color,
+    radius: int,
+) -> None:
+    if x2 <= x1 or y2 <= y1:
+        return
+    radius = max(1, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
+    cv2.rectangle(canvas, (x1 + radius, y1), (x2 - radius, y2), color, -1, cv2.LINE_AA)
+    cv2.rectangle(canvas, (x1, y1 + radius), (x2, y2 - radius), color, -1, cv2.LINE_AA)
+    for cx, cy in (
+        (x1 + radius, y1 + radius),
+        (x2 - radius, y1 + radius),
+        (x1 + radius, y2 - radius),
+        (x2 - radius, y2 - radius),
+    ):
+        cv2.circle(canvas, (cx, cy), radius, color, -1, cv2.LINE_AA)
+
+
 class CityCar(StreetActor):
     """#1 Modkørende trafik i venstre bane (højre mod venstre)."""
+
+    WHEEL = (96, 98, 102)
+    LIGHT = (250, 250, 252)
 
     def __init__(self, phase: float, speed: float, lane: int, color: Color, length: int) -> None:
         super().__init__(phase, speed, lane)
@@ -97,16 +133,179 @@ class CityCar(StreetActor):
     def draw(self, canvas: np.ndarray, t: float) -> None:
         h, w = canvas.shape[:2]
         front_x, y, car_len = self._lane_pose(t, w, h)
-        x0 = front_x - car_len
-        body_h = max(12, int(14 + car_len * 0.06))
-        cv2.rectangle(canvas, (x0, y), (front_x, y + body_h), self.color, -1, cv2.LINE_AA)
-        cv2.rectangle(canvas, (x0 + 6, y - 8), (front_x - 8, y + 2), (240, 245, 255), -1, cv2.LINE_AA)
-        cv2.circle(canvas, (x0 + 10, y + body_h), 5, (30, 30, 30), -1, cv2.LINE_AA)
-        cv2.circle(canvas, (front_x - 10, y + body_h), 5, (30, 30, 30), -1, cv2.LINE_AA)
+        #1 Frontvendt bil i bilens egen farve. Samme form som reference-ikonet.
+        self._paint_front(canvas, front_x - car_len // 2, y, max(40, car_len))
+
+    def _paint_front(self, canvas: np.ndarray, cx: int, top: int, width: int) -> None:
+        width = max(24, int(width))
+        height = max(18, int(width * 0.74))
+        x1 = cx - width // 2
+        y1 = top
+        x2 = x1 + width
+        y2 = top + height
+        wheel_w = max(4, width // 6)
+        wheel_h = max(4, height // 7)
+        cv2.rectangle(canvas, (x1 - wheel_w // 5, y2 - wheel_h), (x1 + wheel_w, y2 + wheel_h // 3), self.WHEEL, -1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (x2 - wheel_w, y2 - wheel_h), (x2 + wheel_w // 5, y2 + wheel_h // 3), self.WHEEL, -1, cv2.LINE_AA)
+        body = self.color
+        shade = _tone(body, 0.78)
+        _fill_round_rect(canvas, x1, y1, x2, y2, body, max(4, width // 7))
+        mid = x1 + width // 2
+        cv2.rectangle(canvas, (mid, y1 + width // 7), (x2 - width // 7, y2 - width // 7), shade, -1, cv2.LINE_AA)
+        glass_top = y1 + max(3, height // 9)
+        glass_bottom = y1 + int(height * 0.46)
+        glass_left = x1 + width // 7
+        glass_right = x2 - width // 7
+        _fill_round_rect(canvas, glass_left, glass_top, glass_right, glass_bottom, _tone(body, 0.72), max(3, width // 10))
+        cv2.rectangle(
+            canvas,
+            (mid, glass_top + 2),
+            (glass_right - 2, glass_bottom - 2),
+            _tone(body, 0.55),
+            -1,
+            cv2.LINE_AA,
+        )
+        mirror_y = y1 + int(height * 0.40)
+        mirror_rx = max(3, width // 11)
+        mirror_ry = max(3, height // 9)
+        cv2.ellipse(canvas, (x1, mirror_y), (mirror_rx, mirror_ry), 0, 0, 360, body, -1, cv2.LINE_AA)
+        cv2.ellipse(canvas, (x2, mirror_y), (mirror_rx, mirror_ry), 0, 0, 360, shade, -1, cv2.LINE_AA)
+        light_y = y1 + int(height * 0.66)
+        light_r = max(2, width // 11)
+        cv2.circle(canvas, (x1 + width // 4, light_y), light_r, self.LIGHT, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (x2 - width // 4, light_y), light_r, self.LIGHT, -1, cv2.LINE_AA)
+        smile_top = light_y + light_r
+        smile_bottom = min(y2 - max(2, height // 12), smile_top + max(3, height // 8))
+        _fill_round_rect(
+            canvas,
+            x1 + width // 4,
+            smile_top,
+            x2 - width // 4,
+            smile_bottom,
+            _tone(body, 0.58),
+            max(2, height // 16),
+        )
 
     def hitbox(self, t: float, width: int, height: int) -> Tuple[int, int, int]:
         x, y, car_len = self._lane_pose(t, width, height)
         return x - car_len // 2, y + 6, 20
+
+
+#1 Én bil ad gangen. 4 sekunder fra horisonten og ud. 2 sekunder før næste farve.
+ONCOMING_APPROACH_SECONDS = 4.0
+ONCOMING_GAP_SECONDS = 2.0
+ONCOMING_COLORS: Tuple[Color, ...] = (
+    (40, 90, 230),
+    (40, 200, 90),
+    (200, 80, 255),
+    (30, 210, 230),
+)
+
+
+class OncomingLaneCar(CityCar):
+    """#1 Starter i horisonten, midt i sin bane, og vokser mod kameraet."""
+
+    def __init__(self, color: Color, lane: int = 0) -> None:
+        super().__init__(0.0, 0.0, lane, color, 46)
+        self.progress = 0.0
+        #1 Hver bil kan kun trække point fra én gang.
+        self.struck = False
+
+    def pose(self, width: int, height: int) -> Tuple[int, int, int]:
+        horizon, road_top, vx, _vy, half_h, half_n = _road_layout(height, width)
+        vanish_y = horizon + 8
+        near_width = half_n * 0.42
+        far_width = max(8.0, half_h * 0.12)
+        car_w = far_width + self.progress * (near_width - far_width)
+        car_h = max(18.0, car_w * 0.74)
+        end_y = height + car_h
+        y = vanish_y + self.progress * (end_y - vanish_y)
+        lane_y = min(max(y, float(horizon)), float(road_top))
+        half = _road_half_at_y(lane_y, horizon, road_top, half_h, half_n)
+        #1 Midten af banen er halvvejs mellem midtstriben og kanten. 0 er venstre, 1 er højre.
+        side = -1.0 if self.lane == 0 else 1.0
+        center_x = int(round(vx + side * half / 2.0))
+        top = int(round(y - car_h / 2.0))
+        return center_x, top, max(8, int(round(car_w)))
+
+    def bounds(self, width: int, height: int) -> Tuple[int, int, int, int]:
+        """#1 Kroppen, som forsiden tegnes i."""
+        center_x, top, car_w = self.pose(width, height)
+        car_h = max(18, int(car_w * 0.74))
+        x1 = center_x - car_w // 2
+        return x1, top, x1 + car_w, top + car_h
+
+    def overlaps(self, box: Tuple[int, int, int, int], width: int, height: int) -> bool:
+        return _rects_overlap(self.bounds(width, height), box)
+
+    def strike(self, box: Tuple[int, int, int, int], width: int, height: int) -> bool:
+        """#1 True kun første gang bilen overlapper brugeren."""
+        if self.struck or not self.overlaps(box, width, height):
+            return False
+        self.struck = True
+        return True
+
+    def draw(self, canvas: np.ndarray, t: float) -> None:
+        del t
+        height, width = canvas.shape[:2]
+        center_x, top, car_w = self.pose(width, height)
+        self._paint_front(canvas, center_x, top, car_w)
+
+
+def _rects_overlap(
+    a: Tuple[int, int, int, int],
+    b: Tuple[int, int, int, int],
+) -> bool:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    return ax1 < bx2 and ax2 > bx1 and ay1 < by2 and ay2 > by1
+
+
+class OncomingTraffic:
+    """#1 Højst én modkørende bil. Banerne skiftes, så de aldrig kører samtidig."""
+
+    def __init__(self) -> None:
+        self._color_i = 0
+        self._lane = 0
+        self.car = OncomingLaneCar(ONCOMING_COLORS[0], self._lane)
+        self.active = True
+        self._wait_until: Optional[float] = None
+        self._last_now: Optional[float] = None
+
+    def tick(self, now: float) -> None:
+        if self._last_now is None:
+            self._last_now = now
+        dt = max(0.0, min(0.1, now - self._last_now))
+        self._last_now = now
+        if not self.active:
+            if self._wait_until is not None and now >= self._wait_until:
+                self._start_next()
+            return
+        self.car.progress += dt / ONCOMING_APPROACH_SECONDS
+        if self.car.progress >= 1.0:
+            self.active = False
+            self._wait_until = now + ONCOMING_GAP_SECONDS
+
+    def _start_next(self) -> None:
+        self._color_i = (self._color_i + 1) % len(ONCOMING_COLORS)
+        previous = self.car.color
+        #1 Næste bil kører i den anden bane. Den forrige er allerede væk.
+        self._lane = 1 - self._lane
+        self.car = OncomingLaneCar(ONCOMING_COLORS[self._color_i], self._lane)
+        if self.car.color == previous:
+            self._color_i = (self._color_i + 1) % len(ONCOMING_COLORS)
+            self.car = OncomingLaneCar(ONCOMING_COLORS[self._color_i], self._lane)
+        self.active = True
+        self._wait_until = None
+
+    def draw(self, canvas: np.ndarray) -> None:
+        if self.active:
+            self.car.draw(canvas, 0.0)
+
+
+#1 Tegningen ved scale 1: ører til fødder, 47 px høj og 60 px bred.
+KITTEN_BODY_HEIGHT = 47
+KITTEN_BODY_WIDTH = 60
 
 
 class StreetKitten(StreetActor):
@@ -114,6 +313,8 @@ class StreetKitten(StreetActor):
 
     FUR = ((40, 145, 230), (170, 170, 175), (210, 235, 250), (55, 70, 90))
     HELMETS = ((40, 45, 230), (20, 210, 255), (230, 130, 40), (50, 175, 70))
+    #1 Fem sekunder på uret, ikke på antal billeder.
+    VISIBLE_SECONDS = 5.0
 
     def __init__(
         self,
@@ -125,14 +326,23 @@ class StreetKitten(StreetActor):
         helmet: Color,
         *,
         enter_from_left: bool = True,
+        depth: float = 1.0,
+        shown_at: Optional[float] = None,
     ) -> None:
         super().__init__(phase, speed, lane)
         self.kitten_id = kitten_id
         self.fur = fur
         self.helmet = helmet
         self.enter_from_left = enter_from_left
+        #1 1 er forgrunden. 0 er horisonten.
+        self.depth = float(np.clip(depth, 0.0, 1.0))
+        self.shown_at = time.monotonic() if shown_at is None else shown_at
         self.name = f"Killing {kitten_id}"
         self._entry_delay = phase * 48.0
+
+    def expired(self, now: float) -> bool:
+        """#1 Efter 5 sekunder er killingen væk."""
+        return now - self.shown_at >= self.VISIBLE_SECONDS
 
     def x_on(self, t: float, width: int, margin: int = 90) -> int:
         elapsed = max(0.0, t - self.start_t - self._entry_delay)
@@ -141,29 +351,44 @@ class StreetKitten(StreetActor):
             return int(-margin + travel)
         return int(width + margin - travel)
 
-    def wrapped(self, t: float, width: int) -> bool:
+    def wrapped(self, t: float, width: int, height: int) -> bool:
         """True når killingen er løbet helt over og forsvinder på modsatte side."""
-        x = self.x_on(t, width)
+        x = self._road_x(t, width, height)
         prev = self._prev_x
         self._prev_x = x
         if prev is None:
             return False
+        _horizon, _road_top, vx, _vy, half_h, half_n = _road_layout(height, width)
+        half = _road_half_at_y(float(self._feet_y(height, width)), _horizon, _road_top, half_h, half_n)
         if self.enter_from_left:
-            return prev < width * 0.84 and x >= width * 0.84
-        return prev > width * 0.16 and x <= width * 0.16
+            far = vx + half
+            return prev < far and x >= far
+        near = vx - half
+        return prev > near and x <= near
+
+    def _feet_y(self, height: int, width: int) -> int:
+        horizon, road_top, _vx, _vy, _half_h, _half_n = _road_layout(height, width)
+        return int(round(horizon + self.depth * (road_top - horizon)))
+
+    def _body_scale(self, height: int, width: int) -> float:
+        """#1 Forgrunden er 1/5 af billedhøjden. Tættere på horisonten følger vejens bredde."""
+        horizon, road_top, _vx, _vy, half_h, half_n = _road_layout(height, width)
+        half = _road_half_at_y(float(self._feet_y(height, width)), horizon, road_top, half_h, half_n)
+        foreground = (height / 5.0) / KITTEN_BODY_HEIGHT
+        return foreground * (half / max(half_n, 1.0))
+
+    def _road_x(self, t: float, width: int, height: int) -> int:
+        elapsed = max(0.0, t - self.start_t - self._entry_delay)
+        travel = elapsed * (self.speed * 3.5)
+        horizon, road_top, vx, _vy, half_h, half_n = _road_layout(height, width)
+        half = _road_half_at_y(float(self._feet_y(height, width)), horizon, road_top, half_h, half_n)
+        margin = 90
+        if self.enter_from_left:
+            return int(vx - half - margin + travel)
+        return int(vx + half + margin - travel)
 
     def _depth(self, t: float, width: int, height: int) -> Tuple[int, int, float]:
-        x = self.x_on(t, width)
-        if self.enter_from_left:
-            prog = (x + 90) / max(width * 0.58, 1)
-        else:
-            prog = (width + 90 - x) / max(width * 0.58, 1)
-        prog = float(np.clip(prog, 0.0, 1.0))
-        _hz, road_top, _vx, _vy, _hh, _hn = _road_layout(height, width)
-        base_y = road_top - 6 - self.lane * 8
-        feet_y = base_y - int(prog * 14)
-        scale = 1.08 + 0.38 * prog
-        return x, feet_y, scale
+        return self._road_x(t, width, height), self._feet_y(height, width), self._body_scale(height, width)
 
     def draw(self, canvas: np.ndarray, t: float) -> None:
         h, w = canvas.shape[:2]
@@ -173,8 +398,10 @@ class StreetKitten(StreetActor):
 
     def hitbox(self, t: float, width: int, height: int) -> Tuple[int, int, int]:
         x, feet_y, scale = self._depth(t, width, height)
-        y = feet_y - 18
-        return x, y, max(18, int(26 * scale))
+        #1 Træffet dækker den tegnede krop, ikke et fast punkt over fødderne.
+        y = int(round(feet_y - KITTEN_BODY_HEIGHT * scale / 2.0))
+        radius = max(8, int(round(max(KITTEN_BODY_WIDTH, KITTEN_BODY_HEIGHT) * scale / 2.0)))
+        return x, y, radius
 
 
 def _draw_kitten_side_core(
@@ -322,7 +549,7 @@ class PerspectiveRunLayer(CityLayer):
 
 
 class HillLayer(CityLayer):
-    """#1 Lysegrønne runde bakketoppe langs vejen — uden træer."""
+    """#1 Lysegrønne bakketoppe kun på horisonten. De står stille."""
 
     HILL = (168, 228, 186)
     HILL_SHADE = (148, 210, 164)
@@ -330,69 +557,27 @@ class HillLayer(CityLayer):
     def draw(self, canvas: np.ndarray, t: float) -> None:
         del t
         h, w = canvas.shape[:2]
-        horizon, road_top, vx, _vy, half_h, half_near = _road_layout(h, w)
+        horizon, _road_top, _vx, _vy, _half_h, _half_near = _road_layout(h, w)
+        #1 Fast række på horisonten. Ingen dybde og intet tidsled, så de ikke kører med vejen.
         specs = (
-            (0.06, -1, 1.05),
-            (0.28, -1, 1.35),
-            (0.55, -1, 1.65),
-            (0.82, -1, 1.95),
-            (0.14, 1, 1.10),
-            (0.40, 1, 1.45),
-            (0.68, 1, 1.75),
-            (0.90, 1, 2.05),
+            (0.06, 0.11, self.HILL),
+            (0.20, 0.15, self.HILL_SHADE),
+            (0.36, 0.10, self.HILL),
+            (0.52, 0.13, self.HILL_SHADE),
+            (0.68, 0.16, self.HILL),
+            (0.84, 0.12, self.HILL_SHADE),
+            (0.98, 0.10, self.HILL),
         )
-        for depth, side, scale in specs:
-            base_y = int(horizon + 8 + depth * (road_top - horizon - 18))
-            half = _road_half_at_y(float(base_y), horizon, road_top, half_h, half_near)
-            rx = max(32, int((34 + depth * 32) * scale))
-            ry = max(16, int(rx * 0.48))
-            #1 Hele bakken ligger i grøft/græs — indre kant rører ikke kørebanen.
-            verge = 10 + int(depth * 16)
-            if side < 0:
-                inner_x = int(vx - half)
-                cx = inner_x - verge - rx
-                cx = max(rx + 2, cx)
-                if cx + rx >= inner_x - 4:
-                    continue
-            else:
-                inner_x = int(vx + half)
-                cx = inner_x + verge + rx
-                cx = min(w - rx - 2, cx)
-                if cx - rx <= inner_x + 4:
-                    continue
-            color = self.HILL if side < 0 else self.HILL_SHADE
-            self._hill(canvas, cx, base_y, rx, ry, color)
+        base_y = horizon + max(6, int(h * 0.02))
+        for nx, nrx, color in specs:
+            rx = max(36, int(nrx * w))
+            ry = max(18, int(rx * 0.42))
+            self._hill(canvas, int(nx * w), base_y, rx, ry, color)
 
     @staticmethod
     def _hill(canvas: np.ndarray, cx: int, base_y: int, rx: int, ry: int, color: Color) -> None:
         # OpenCV måler med uret: 180→360 er den øverste halvbue.
         cv2.ellipse(canvas, (cx, base_y), (rx, ry), 0, 180, 360, color, -1, cv2.LINE_AA)
-
-
-class StreetPropsLayer(CityLayer):
-    """Lygtepæle langs vejkanten — følger vejens perspektiv."""
-
-    def draw(self, canvas: np.ndarray, t: float) -> None:
-        h, w = canvas.shape[:2]
-        horizon, road_top, vx, _vy, half_h, half_near = _road_layout(h, w)
-        #1 Færre pæle og større fase-skridt, så der er længere mellem dem.
-        count = 3
-        gap = 1.0 / count
-        for side in (-1, 1):
-            for i in range(count):
-                phase = (t * 0.055 + i * gap) % 1.0
-                foot_y = int(horizon + 18 + phase * (road_top - horizon - 10))
-                half = _road_half_at_y(float(foot_y), horizon, road_top, half_h, half_near)
-                margin = 10 + phase * 6
-                side_x = int(vx + side * (half + margin))
-                pole_h = int(16 + phase * 48)
-                top_y = foot_y - pole_h
-                if top_y < horizon:
-                    continue
-                cv2.line(canvas, (side_x, foot_y), (side_x, top_y), (82, 88, 98), max(2, int(2 + phase * 2)), cv2.LINE_AA)
-                lamp_r = max(4, int(4 + phase * 5))
-                cv2.circle(canvas, (side_x, top_y), lamp_r, (110, 200, 255), -1, cv2.LINE_AA)
-                cv2.circle(canvas, (side_x, top_y), max(2, lamp_r // 2), (240, 250, 255), -1, cv2.LINE_AA)
 
 
 class AdventureCityBackdrop:
@@ -404,46 +589,41 @@ class AdventureCityBackdrop:
         self._clouds = CloudLayer()
         self._run = PerspectiveRunLayer()
         self._hills = HillLayer()
-        self._props = StreetPropsLayer()
         self._road = RoadLayer()
-        self.cars: List[CityCar] = [
-            CityCar(0.0, 3.2, 0, (40, 90, 230), 46),
-            CityCar(0.33, 3.6, 1, (40, 200, 90), 52),
-            CityCar(0.62, 3.0, 0, (200, 80, 255), 48),
-            CityCar(0.85, 3.8, 1, (30, 210, 230), 42),
-        ]
+        #1 Kun én modkørende bil synlig ad gangen.
+        self.traffic = OncomingTraffic()
         self.kittens: List[StreetKitten] = []
         self.reset_kittens()
 
     def reset_kittens(self) -> None:
-        self.kittens = []
-        for i in range(4):
-            self.kittens.append(
-                StreetKitten(
-                    phase=0.08 + i * 0.16,
-                    speed=1.55 + 0.22 * i,
-                    lane=i % 2,
-                    kitten_id=i + 1,
-                    fur=StreetKitten.FUR[i % len(StreetKitten.FUR)],
-                    helmet=StreetKitten.HELMETS[i % len(StreetKitten.HELMETS)],
-                    enter_from_left=(i % 2 == 0),
-                )
+        #1 Kun én killing. Den første står i forgrunden.
+        self.kittens = [
+            StreetKitten(
+                phase=0.0,
+                speed=1.8,
+                lane=0,
+                kitten_id=1,
+                fur=StreetKitten.FUR[0],
+                helmet=StreetKitten.HELMETS[0],
+                enter_from_left=True,
+                depth=1.0,
             )
+        ]
 
     def tick(self) -> None:
         self.t += 1.0
+        #1 Bilen følger sekunder, ikke hvor hurtigt billedet tegnes.
+        self.traffic.tick(time.monotonic())
 
     def render(self, width: int, height: int) -> np.ndarray:
         canvas = np.zeros((height, width, 3), dtype=np.uint8)
         self._sky.draw(canvas, self.t)
         self._clouds.draw(canvas, self.t)
-        #1 Ingen parallax-bygninger eller facader — åbent landskab.
-        self._run.draw(canvas, self.t)
+        #1 Bakker bag vejen, så kun toppen ses over horisonten.
         self._hills.draw(canvas, self.t)
-        self._props.draw(canvas, self.t)
+        self._run.draw(canvas, self.t)
         self._road.draw(canvas, self.t)
-        for car in self.cars:
-            car.draw(canvas, self.t)
+        self.traffic.draw(canvas)
         for kitten in self.kittens:
             kitten.draw(canvas, self.t)
         return canvas

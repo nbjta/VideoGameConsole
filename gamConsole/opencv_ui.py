@@ -7,9 +7,11 @@ from typing import Callable, Dict, Optional, Tuple
 
 import cv2
 
-QUIT_BAR_H = 44
+#3 Krydset ligger oven på billedet, så der ikke er en bjælke under spillet.
+QUIT_BAR_H = 0
 HOME_X1, HOME_Y1, HOME_X2, HOME_Y2 = 8, 8, 132, 44
-#3 Plads til spil-indhold mellem Hjem-knappen og LUK-bjælken.
+_CLOSE_SIZE = 46
+_CLOSE_MARGIN = 14
 _content_wh: Tuple[int, int] = (960, 752)
 
 
@@ -32,31 +34,37 @@ def key_requests_home(key: int) -> bool:
 
 def draw_home_button(frame) -> None:
     # BGR, så knappen tegnes blå. Tuplen (60, 90, 140) blev vist som brun.
-    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (170, 110, 60), -1)
-    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (220, 170, 130), 2)
-    draw_text(frame, "Hjem", (HOME_X1 + 16, HOME_Y1 + 6), scale=0.62, color=(255, 255, 255))
+    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (245, 205, 150), -1)
+    cv2.rectangle(frame, (HOME_X1, HOME_Y1), (HOME_X2, HOME_Y2), (220, 160, 90), 2)
+    draw_text(frame, "Hjem", (HOME_X1 + 16, HOME_Y1 + 6), scale=0.62, color=(110, 70, 30))
 
 
 def home_button_click(x: int, y: int) -> bool:
     return HOME_X1 <= x <= HOME_X2 and HOME_Y1 <= y <= HOME_Y2
 
 
+def close_button_rect(width: int) -> Tuple[int, int, int, int]:
+    """#3 Krydset sidder i øverste højre hjørne."""
+    x1 = width - _CLOSE_MARGIN - _CLOSE_SIZE
+    y1 = _CLOSE_MARGIN
+    return x1, y1, x1 + _CLOSE_SIZE, y1 + _CLOSE_SIZE
+
+
 def draw_quit_bar(frame) -> None:
-    h, w = frame.shape[:2]
-    y1 = h - QUIT_BAR_H
-    cv2.rectangle(frame, (0, y1), (w, h), (50, 45, 70), -1)
-    cv2.rectangle(frame, (8, y1 + 6), (w - 8, h - 6), (120, 70, 70), 2)
-    draw_text(
-        frame,
-        "LUK konsol - klik her eller Q / Esc",
-        (20, y1 + 10),
-        scale=0.55,
-        color=(230, 230, 255),
-    )
+    """#3 X lukker konsollen."""
+    _h, width = frame.shape[:2]
+    x1, y1, x2, y2 = close_button_rect(width)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (36, 36, 170), -1)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+    pad = 12
+    cv2.line(frame, (x1 + pad, y1 + pad), (x2 - pad, y2 - pad), (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.line(frame, (x1 + pad, y2 - pad), (x2 - pad, y1 + pad), (255, 255, 255), 3, cv2.LINE_AA)
 
 
-def quit_bar_click(frame_height: int, y: int) -> bool:
-    return y >= frame_height - QUIT_BAR_H
+def quit_bar_click(frame_width: int, x: int, y: int) -> bool:
+    """#3 Kun selve krydset lukker."""
+    x1, y1, x2, y2 = close_button_rect(frame_width)
+    return x1 <= x <= x2 and y1 <= y <= y2
 
 
 #4 Hershey i cv2.putText har ikke ø/æ, så UTF-8 bliver til ??.
@@ -192,6 +200,35 @@ def _macos_visible_height() -> Optional[int]:
         return None
 
 
+#9 Samme placering som fit_frame, så et klik på Spil igen rammer knappen i spillets billede.
+def fitted_frame_rect(frame_w: int, frame_h: int, canvas_w: int, canvas_h: int) -> Tuple[int, int, int, int]:
+    top = HOME_Y2
+    bottom = max(top + 1, canvas_h - QUIT_BAR_H)
+    avail_h = bottom - top
+    if frame_w <= 0 or frame_h <= 0 or canvas_w <= 0 or avail_h <= 0:
+        return 0, top, 0, 0
+    scale = min(canvas_w / frame_w, avail_h / frame_h)
+    nw = max(1, min(canvas_w, int(frame_w * scale)))
+    nh = max(1, min(avail_h, int(frame_h * scale)))
+    x0 = (canvas_w - nw) // 2
+    y0 = top + (avail_h - nh) // 2
+    return x0, y0, nw, nh
+
+
+def game_point_from_canvas(
+    ix: int, iy: int, frame_w: int, frame_h: int, canvas_w: int, canvas_h: int
+) -> Optional[Tuple[int, int]]:
+    x0, y0, nw, nh = fitted_frame_rect(frame_w, frame_h, canvas_w, canvas_h)
+    if nw <= 0 or nh <= 0 or frame_w <= 0 or frame_h <= 0:
+        return None
+    if not (x0 <= ix < x0 + nw and y0 <= iy < y0 + nh):
+        return None
+    return (
+        min(frame_w - 1, int((ix - x0) * frame_w / nw)),
+        min(frame_h - 1, int((iy - y0) * frame_h / nh)),
+    )
+
+
 def fit_frame(frame, width: int, height: int):
     import numpy as np
 
@@ -199,15 +236,8 @@ def fit_frame(frame, width: int, height: int):
     fh, fw = frame.shape[:2]
     if fh == 0 or fw == 0:
         return canvas
-    top = HOME_Y2
-    bottom = max(top + 1, height - QUIT_BAR_H)
-    avail_h = bottom - top
-    scale = min(width / fw, avail_h / fh)
-    nw = max(1, min(width, int(fw * scale)))
-    nh = max(1, min(avail_h, int(fh * scale)))
+    x0, y0, nw, nh = fitted_frame_rect(fw, fh, width, height)
     resized = cv2.resize(frame, (nw, nh))
-    x0 = (width - nw) // 2
-    y0 = top + (avail_h - nh) // 2
     canvas[y0 : y0 + nh, x0 : x0 + nw] = resized
     return canvas
 
@@ -217,15 +247,31 @@ def run_window_loop(
     cap: cv2.VideoCapture,
     render: Callable[[], Optional[object]],
     on_key: Optional[Callable[[int], None]] = None,
+    on_click: Optional[Callable[[int, int], None]] = None,
 ) -> None:
     """Legacy fuldskærms-løkke (CLI). Foretræk gamConsole-menu med indlejrede spil."""
     stop = False
+    last_w = 640
     last_h = 480
 
-    def on_mouse(event: int, _x: int, y: int, _flags: int, _param: object) -> None:
+    def on_mouse(event: int, x: int, y: int, _flags: int, _param: object) -> None:
         nonlocal stop
-        if event == cv2.EVENT_LBUTTONDOWN and quit_bar_click(last_h, y):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        ix, iy = x, y
+        try:
+            _left, _top, win_w, win_h = cv2.getWindowImageRect(window_name)
+            if win_w > 0 and win_h > 0:
+                ix = int(x * last_w / win_w)
+                iy = int(y * last_h / win_h)
+        except cv2.error:
+            pass
+        if quit_bar_click(last_w, ix, iy):
             stop = True
+            return
+        #9 Klik i spillets eget billede, blandt andet Spil igen.
+        if on_click is not None:
+            on_click(ix, iy)
 
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(window_name, on_mouse)
@@ -236,7 +282,7 @@ def run_window_loop(
         frame = render()
         if frame is None:
             break
-        last_h = frame.shape[0]
+        last_h, last_w = frame.shape[:2]
         draw_quit_bar(frame)
         cv2.imshow(window_name, frame)
         key = cv2.waitKey(1) & 0xFF

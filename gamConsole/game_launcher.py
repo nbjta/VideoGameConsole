@@ -48,6 +48,8 @@ def launch_game_entry(entry: GameEntry, camera: int = 0) -> Tuple[bool, str]:
 def _launch_python_module(entry: GameEntry, camera: int) -> Tuple[bool, str]:
     modules = {
         "flying_users": "gamConsole.flying_users_ar",
+        #9
+        "gurli_gris": "gamConsole.gurli_gris",
     }
     module = modules.get(entry.mode_arg or "")
     if module is None:

@@ -8,9 +8,10 @@ import cv2
 import numpy as np
 
 from gamConsole.flying_users_ar import FlyingUsersARGame
+from gamConsole.round_score import RoundScoreSession
 
 
-class FlyingUsersSession:
+class FlyingUsersSession(RoundScoreSession):
     title = "Humdingers killinger (AR)"
 
     def __init__(self, camera: int) -> None:

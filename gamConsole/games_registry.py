@@ -37,10 +37,11 @@ GAMES: List[GameEntry] = [
         mode_arg="debug",
         source_url=WEBCAM_GAMES_REPO,
     ),
+    #1 #9
     GameEntry(
         id="flying-users-ar",
         title="Humdingers killinger (AR)",
-        description="Kast burgere efter Humdingers killinger i en bevægelig cartoon-by.",
+        description="Kast burgere efter Humdingers killinger. Et spil varer 3 minutter.",
         mode_arg="flying_users",
         source_url="https://github.com/nbjta/VideoGameConsole",
         launcher="builtin",
@@ -80,8 +81,22 @@ GAMES: List[GameEntry] = [
         source_url="https://github.com/BOSS294/Handora",
         launcher="handora",
     ),
+    #9
+    GameEntry(
+        id="gurli-gris",
+        title="Gurli Gris",
+        description="Gurli i landskabet. Et spil varer 3 minutter. Vift en gren på en boble i 0,5 sekund.",
+        mode_arg="gurli_gris",
+        source_url="https://github.com/nbjta/VideoGameConsole",
+        launcher="builtin",
+    ),
 ]
 
 
 def games_for_menu() -> List[GameEntry]:
-    return list(GAMES)
+    #9 Gurli og Humdingers forrest i karusellen.
+    front_ids = ("gurli-gris", "flying-users-ar")
+    front = [g for g in GAMES if g.id in front_ids]
+    front.sort(key=lambda g: front_ids.index(g.id))
+    rest = [g for g in GAMES if g.id not in front_ids]
+    return front + rest

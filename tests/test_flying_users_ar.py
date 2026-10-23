@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,30 +16,34 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
 from gamConsole.flying_users_ar import (  # noqa: E402
-    ArmThrowDetector,
+    CAR_HIT_POINTS,
+    WristThrowDetector,
+    CarHitFlash,
+    CarHitSound,
     FlyingUsersARGame,
     ThrowEvent,
     ThrownBurger,
     blit_circle,
+    kitten_cross_y,
     make_burger_sprite,
     make_kitten_sprite,
     motion_mask,
 )
-from gamConsole.adventure_city import AdventureCityBackdrop, StreetKitten  # noqa: E402
-from gamConsole.overhead_branches import OverheadBranch  # noqa: E402
+from gamConsole.pose_body_overlay import R_WRIST, BodyPose  # noqa: E402
+from gamConsole.adventure_city import (  # noqa: E402
+    ONCOMING_GAP_SECONDS,
+    AdventureCityBackdrop,
+    OncomingLaneCar,
+    OncomingTraffic,
+    StreetKitten,
+    _road_half_at_y,
+    _road_layout,
+    draw_kitten_side,
+)
 from gamConsole.games_registry import games_for_menu  # noqa: E402
+from gamConsole.round_score import ROUND_SECONDS, HighScoreList, ResultScreen, RoundScore  # noqa: E402
 from gamConsole.player_cutout import PlayerCutout  # noqa: E402
-
-
-class OverheadBranchTest(unittest.TestCase):
-    def test_sun_branch_is_brief(self) -> None:
-        b = OverheadBranch(0.0, 0.0, enter_from_left=True)
-        b.start_t = 10.0
-        self.assertFalse(b.active(9.0))
-        self.assertTrue(b.active(10.0))
-        self.assertTrue(b.active(10.0 + OverheadBranch.DURATION - 1))
-        self.assertFalse(b.active(10.0 + OverheadBranch.DURATION))
-        self.assertTrue(b.passed(10.0 + OverheadBranch.DURATION, 640))
+from gamConsole.leader_back_view import player_car_box  # noqa: E402
 
 
 class StreetKittenMotionTest(unittest.TestCase):
@@ -60,6 +66,34 @@ class StreetKittenMotionTest(unittest.TestCase):
         from gamConsole.adventure_city import StreetActor
 
         self.assertIsInstance(self._kitten(), StreetActor)
+
+    def test_only_one_kitten_is_created(self) -> None:
+        city = AdventureCityBackdrop()
+        self.assertEqual(len(city.kittens), 1)
+        self.assertEqual(city.kittens[0].depth, 1.0)
+
+    def test_foreground_body_is_one_fifth_of_the_frame_height(self) -> None:
+        near = self._kitten()
+        near.depth = 1.0
+        far = self._kitten()
+        far.depth = 0.0
+        near_h = _drawn_kitten_height(near._body_scale(640, 480))
+        far_h = _drawn_kitten_height(far._body_scale(640, 480))
+        self.assertAlmostEqual(near_h, 480 / 5, delta=3)
+        self.assertLess(far_h, near_h)
+
+    def test_disappears_after_five_seconds(self) -> None:
+        kitten = self._kitten()
+        kitten.shown_at = 10.0
+        self.assertFalse(kitten.expired(14.9))
+        self.assertTrue(kitten.expired(15.0))
+
+
+def _drawn_kitten_height(scale: float) -> int:
+    canvas = np.zeros((480, 640, 3), dtype=np.uint8)
+    draw_kitten_side(canvas, 320, 360, (40, 145, 230), (40, 45, 230), 0.0, scale=scale)
+    rows = np.where(np.any(canvas > 10, axis=2))[0]
+    return int(rows.max() - rows.min() + 1)
 
 
 class ThrownBurgerPhysicsTest(unittest.TestCase):
@@ -87,26 +121,94 @@ class ThrownBurgerPhysicsTest(unittest.TestCase):
         burger = ThrownBurger.from_throw(event, 640, 480)
         self.assertGreater(burger.vy, 0)
 
+    def test_small_sideways_speed_is_not_forced_across_the_screen(self) -> None:
+        event = ThrowEvent(x_px=500, y_px=80, dx=1.0, dy=10.0)
+        burger = ThrownBurger.from_throw(event, 640, 480)
+        self.assertGreater(burger.vx, 0.0)
+        self.assertAlmostEqual(burger.vx / burger.vy, 0.1)
 
-class ArmThrowDetectorTest(unittest.TestCase):
-    def test_detects_fast_move_in_right_arm_zone(self) -> None:
-        detector = ArmThrowDetector()
-        h, w = 240, 320
-        first = np.zeros((h, w), dtype=np.uint8)
-        second = np.zeros((h, w), dtype=np.uint8)
-        cv2.circle(first, (250, 70), 28, 255, -1)
-        cv2.circle(second, (215, 95), 28, 255, -1)
-        self.assertIsNone(detector.detect(first))
-        event = detector.detect(second)
+    def test_straight_down_stays_straight(self) -> None:
+        event = ThrowEvent(x_px=500, y_px=80, dx=0.0, dy=10.0)
+        burger = ThrownBurger.from_throw(event, 640, 480)
+        self.assertEqual(burger.vx, 0.0)
+        self.assertGreater(burger.vy, 0.0)
+
+    def test_upward_throw_stays_upward(self) -> None:
+        event = ThrowEvent(x_px=200, y_px=200, dx=3.0, dy=-6.0)
+        burger = ThrownBurger.from_throw(event, 640, 480)
+        self.assertLess(burger.vy, 0.0)
+        self.assertAlmostEqual(burger.vx / burger.vy, 3.0 / -6.0)
+
+    def test_direction_stays_constant_until_the_kitten_line(self) -> None:
+        event = ThrowEvent(x_px=180, y_px=80, dx=4.0, dy=8.0)
+        burger = ThrownBurger.from_throw(event, 640, 480)
+        vx, vy = burger.vx, burger.vy
+        cross_y = kitten_cross_y(480, 640)
+        for _ in range(60):
+            if burger.y >= cross_y:
+                break
+            burger.tick()
+        self.assertEqual((burger.vx, burger.vy), (vx, vy))
+        self.assertGreaterEqual(burger.y, cross_y)
+        aimed_x = 180.0 + (vx / vy) * (burger.y - 80.0)
+        self.assertAlmostEqual(burger.x, aimed_x)
+
+    def test_slow_throw_is_scaled_onto_the_same_line(self) -> None:
+        event = ThrowEvent(x_px=200, y_px=80, dx=0.2, dy=0.4)
+        burger = ThrownBurger.from_throw(event, 640, 480)
+        self.assertAlmostEqual(burger.vx / burger.vy, 0.5)
+        cross_y = kitten_cross_y(480, 640)
+        for _ in range(50):
+            burger.tick()
+        self.assertAlmostEqual(burger.y, cross_y)
+
+    def test_starts_at_twice_the_old_radius(self) -> None:
+        burger = ThrownBurger(100.0, 80.0, 0.0, 0.0)
+        self.assertEqual(burger.radius(), 44)
+
+    def test_kitten_cross_y_is_the_foreground_body_center(self) -> None:
+        _horizon, road_top, _vx, _vy, _half_h, _half_n = _road_layout(480, 640)
+        self.assertEqual(kitten_cross_y(480, 640), float(road_top) - 480 / 10.0)
+
+
+def _wrist_pose(width: int, height: int, right: tuple[int, int]) -> BodyPose:
+    points = [(-1, -1)] * 33
+    points[R_WRIST] = right
+    return BodyPose(width, height, tuple(points))
+
+
+class WristThrowDetectorTest(unittest.TestCase):
+    def test_uses_the_average_and_releases_at_the_wrist(self) -> None:
+        detector = WristThrowDetector()
+        points = [(400, 80), (410, 100), (420, 120), (430, 140), (440, 160)]
+        event = None
+        for point in points:
+            event = detector.detect(_wrist_pose(640, 480, point))
         self.assertIsNotNone(event)
         assert event is not None
-        self.assertGreater(event.x_px, int(0.60 * w))
+        self.assertEqual((event.x_px, event.y_px), (440, 160))
+        self.assertAlmostEqual(event.dx, 10.0)
+        self.assertAlmostEqual(event.dy, 20.0)
 
-    def test_ignores_still_mask(self) -> None:
-        detector = ArmThrowDetector()
-        mask = np.zeros((240, 320), dtype=np.uint8)
-        self.assertIsNone(detector.detect(mask))
-        self.assertIsNone(detector.detect(mask))
+    def test_a_hop_that_returns_does_not_throw(self) -> None:
+        detector = WristThrowDetector()
+        points = [(400, 100), (460, 40), (400, 100), (400, 100), (400, 100)]
+        event = None
+        for point in points:
+            event = detector.detect(_wrist_pose(640, 480, point))
+        self.assertIsNone(event)
+
+    def test_one_frame_is_not_enough(self) -> None:
+        detector = WristThrowDetector()
+        self.assertIsNone(detector.detect(_wrist_pose(640, 480, (200, 80))))
+        self.assertIsNone(detector.detect(_wrist_pose(640, 480, (280, 160))))
+
+    def test_still_wrist_does_not_throw(self) -> None:
+        detector = WristThrowDetector()
+        event = None
+        for _ in range(6):
+            event = detector.detect(_wrist_pose(640, 480, (300, 120)))
+        self.assertIsNone(event)
 
 
 class MotionMaskTest(unittest.TestCase):
@@ -117,6 +219,16 @@ class MotionMaskTest(unittest.TestCase):
         mask, prev2 = motion_mask(large, prev)
         self.assertEqual(mask.shape, (120, 160))
         self.assertEqual(prev2.shape, (120, 160))
+
+
+class MenuThumbnailTest(unittest.TestCase):
+    def test_thumbs_match_game_backgrounds(self) -> None:
+        from gamConsole.game_thumbnails import get_game_thumbnail
+
+        for game_id in ("gurli-gris", "flying-users-ar", "webcam-3d"):
+            thumb = get_game_thumbnail(game_id, 96)
+            self.assertEqual(thumb.shape, (96, 96, 3))
+            self.assertGreater(int(thumb.mean()), 8)
 
 
 class FlyingUsersHelpersTest(unittest.TestCase):
@@ -148,7 +260,37 @@ class FlyingUsersGameTest(unittest.TestCase):
         self.assertFalse(game.game_over)
         self.assertEqual(len(game.burgers), 0)
 
-    def test_arm_throw_spawns_burger(self) -> None:
+    def test_three_minutes_and_no_lives_use_the_shared_score_screen(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            game = FlyingUsersARGame(camera=0, scores=HighScoreList(Path(folder) / "scores.json"))
+            self.assertIsInstance(game.match, RoundScore)
+            frame = np.zeros((180, 320, 3), dtype=np.uint8)
+            game.on_frame(frame, now=1000)
+            self.assertIsNone(game.match.result)
+            self.assertFalse(game.accepts_name_key(ord("h")))
+            game.score = 11
+            game.on_frame(frame, now=1000 + ROUND_SECONDS)
+            assert game.match.result is not None
+            self.assertIsInstance(game.match.result, ResultScreen)
+            self.assertEqual(game.match.result.score, 11)
+            self.assertTrue(game.accepts_name_key(ord("h")))
+            game.on_key(ord("h"))
+            assert game.match.result.entry is not None
+            self.assertEqual(game.match.result.entry.name, "h")
+            assert game.match.result.button.rect is not None
+            x1, y1, x2, y2 = game.match.result.button.rect
+            game.on_click((x1 + x2) // 2, (y1 + y2) // 2)
+            self.assertIsNone(game.match.result)
+            self.assertEqual(game.score, 0)
+            self.assertEqual(game.lives, 5)
+            game.on_frame(frame, now=2000)
+            game.lives = 0
+            game.on_frame(frame, now=2001)
+            assert game.match.result is not None
+            self.assertFalse(game.match.round.over(2001))
+            self.assertEqual(game.match.result.score, game.score)
+
+    def test_motion_blob_does_not_spawn_burger(self) -> None:
         game = FlyingUsersARGame(camera=0)
         h, w = 480, 640
         still = np.full((h, w, 3), 40, dtype=np.uint8)
@@ -160,7 +302,32 @@ class FlyingUsersGameTest(unittest.TestCase):
         cv2.circle(second, (430, 190), 50, (220, 220, 220), -1)
         game.on_frame(first)
         game.on_frame(second)
-        self.assertGreaterEqual(len(game.burgers), 1)
+        self.assertEqual(len(game.burgers), 0)
+
+    def test_wrist_throw_spawns_burger_on_the_wrist_line(self) -> None:
+        game = FlyingUsersARGame(camera=0)
+        points = [(400, 80), (410, 100), (420, 120), (430, 140), (440, 160)]
+        for point in points:
+            game._release_throw(_wrist_pose(640, 480, point), 640, 480)
+        self.assertEqual(len(game.burgers), 1)
+        burger = game.burgers[0]
+        self.assertEqual((burger.x, burger.y), (440.0, 160.0))
+        self.assertAlmostEqual(burger.vx / burger.vy, 0.5)
+        game._release_throw(_wrist_pose(640, 480, (450, 180)), 640, 480)
+        self.assertEqual(len(game.burgers), 1)
+
+    def test_kitten_is_replaced_after_five_seconds_without_losing_a_life(self) -> None:
+        game = FlyingUsersARGame(camera=0)
+        self.assertEqual(len(game.kittens), 1)
+        first = game.kittens[0]
+        now = 50.0
+        first.shown_at = now - 5.0
+        lives = game.lives
+        frame = np.full((480, 640, 3), 40, dtype=np.uint8)
+        game.on_frame(frame, now=now)
+        self.assertEqual(len(game.kittens), 1)
+        self.assertIsNot(game.kittens[0], first)
+        self.assertEqual(game.lives, lives)
 
     def test_on_frame_has_street_kittens(self) -> None:
         game = FlyingUsersARGame(camera=0)
@@ -201,6 +368,173 @@ class AdventureCityTest(unittest.TestCase):
         city.tick()
         x1 = city.kittens[0].x_on(city.t, 320)
         self.assertNotEqual(x0, x1)
+
+
+class OncomingCarTest(unittest.TestCase):
+    def test_starts_in_the_middle_of_the_left_lane_at_the_horizon(self) -> None:
+        car = OncomingLaneCar((40, 90, 230))
+        center_x, top, width = car.pose(640, 480)
+        horizon, road_top, vx, _vy, half_h, half_n = _road_layout(480, 640)
+        vanish_y = horizon + 8
+        half = _road_half_at_y(float(vanish_y), horizon, road_top, half_h, half_n)
+        car_h = max(18.0, width * 0.74)
+        self.assertEqual(center_x, int(round(vx - half / 2.0)))
+        self.assertLess(abs((top + car_h / 2.0) - vanish_y), 1.5)
+        self.assertLess(center_x, vx)
+
+    def test_grows_as_it_approaches(self) -> None:
+        car = OncomingLaneCar((40, 90, 230))
+        _x0, top0, width0 = car.pose(640, 480)
+        car.progress = 0.75
+        _x1, top1, width1 = car.pose(640, 480)
+        self.assertGreater(width1, width0)
+        self.assertGreater(top1, top0)
+
+    def test_only_one_car_then_a_different_color_after_the_gap(self) -> None:
+        traffic = OncomingTraffic()
+        self.assertTrue(traffic.active)
+        traffic.tick(0.0)
+        first = traffic.car.color
+        traffic.car.progress = 0.99
+        traffic.tick(0.05)
+        self.assertFalse(traffic.active)
+        self.assertEqual(traffic.car.color, first)
+        traffic.tick(0.05 + ONCOMING_GAP_SECONDS - 0.1)
+        self.assertFalse(traffic.active)
+        traffic.tick(0.05 + ONCOMING_GAP_SECONDS)
+        self.assertTrue(traffic.active)
+        self.assertEqual(traffic.car.progress, 0.0)
+        self.assertNotEqual(traffic.car.color, first)
+        self.assertEqual(traffic.car.lane, 1)
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        hidden = OncomingTraffic()
+        hidden.active = False
+        hidden.draw(blank)
+        self.assertEqual(int(blank.sum()), 0)
+
+    def test_right_lane_is_the_mirror_of_the_left_and_never_both_at_once(self) -> None:
+        left = OncomingLaneCar((40, 90, 230), 0)
+        right = OncomingLaneCar((40, 200, 90), 1)
+        left.progress = right.progress = 0.4
+        lx, _top, _width = left.pose(640, 480)
+        rx, _top, _width = right.pose(640, 480)
+        _horizon, _road_top, vx, _vy, _half_h, _half_n = _road_layout(480, 640)
+        self.assertLess(lx, vx)
+        self.assertGreater(rx, vx)
+        self.assertEqual(vx - lx, rx - vx)
+        traffic = OncomingTraffic()
+        self.assertEqual(traffic.car.lane, 0)
+        self.assertTrue(traffic.active)
+        traffic.car.progress = 1.0
+        traffic.tick(1.0)
+        self.assertFalse(traffic.active)
+        traffic.tick(1.0 + ONCOMING_GAP_SECONDS)
+        self.assertTrue(traffic.active)
+        self.assertEqual(traffic.car.lane, 1)
+
+    def test_centered_user_is_not_hit_and_the_lane_is(self) -> None:
+        width, height = 960, 540
+        _horizon, _road_top, vx, _vy, _half_h, _half_n = _road_layout(height, width)
+        scale = (height / 480.0) * 1.05
+        center = player_car_box(width, height, vx, scale)
+        car = OncomingLaneCar((40, 90, 230), 0)
+        lane_hits = 0
+        for step in range(101):
+            car.progress = step / 100.0
+            car.struck = False
+            self.assertFalse(car.overlaps(center, width, height))
+            lane_x, _top, _car_w = car.pose(width, height)
+            lane_box = player_car_box(width, height, lane_x, scale)
+            if car.overlaps(lane_box, width, height):
+                lane_hits += 1
+                self.assertTrue(car.strike(lane_box, width, height))
+                self.assertFalse(car.strike(lane_box, width, height))
+        self.assertGreater(lane_hits, 0)
+        right = OncomingLaneCar((40, 200, 90), 1)
+        right_hits = 0
+        for step in range(101):
+            right.progress = step / 100.0
+            right.struck = False
+            self.assertFalse(right.overlaps(center, width, height))
+            lane_x, _top, _car_w = right.pose(width, height)
+            if right.overlaps(player_car_box(width, height, lane_x, scale), width, height):
+                right_hits += 1
+        self.assertGreater(right_hits, 0)
+
+
+class CarHitTest(unittest.TestCase):
+    def _game(self) -> FlyingUsersARGame:
+        game = FlyingUsersARGame(camera=0)
+        self.addCleanup(game.player.close)
+        return game
+
+    def test_overlap_subtracts_one_point_once_and_shows_the_burst(self) -> None:
+        game = self._game()
+        game.hit_sound.play = lambda: setattr(game, "sound_played", True)
+        game.sound_played = False
+        game.score = 5
+        width, height = 960, 540
+        car = game.city.traffic.car
+        scale = game.player.leader_scale(height)
+        box = None
+        for step in range(101):
+            car.progress = step / 100.0
+            car.struck = False
+            lane_x, _top, _car_w = car.pose(width, height)
+            candidate = player_car_box(width, height, lane_x, scale)
+            if car.overlaps(candidate, width, height):
+                box = candidate
+                break
+        self.assertIsNotNone(box)
+        assert box is not None
+        car.struck = False
+        game.player.car_box = lambda _width, _height: box
+        game._apply_car_hit(width, height)
+        self.assertEqual(game.score, 5 + CAR_HIT_POINTS)
+        self.assertEqual(CAR_HIT_POINTS, -1)
+        self.assertTrue(game.sound_played)
+        gains = game._score_view().gains
+        self.assertEqual(len(gains), 1)
+        self.assertEqual(gains[0].label(), "-1")
+        self.assertTrue(game.hit_flash.visible())
+        game.sound_played = False
+        game._apply_car_hit(width, height)
+        self.assertEqual(game.score, 4)
+        self.assertFalse(game.sound_played)
+        self.assertEqual(len(game._score_view().gains), 1)
+
+    def test_waiting_car_does_not_change_the_score(self) -> None:
+        game = self._game()
+        game.hit_sound.play = lambda: setattr(game, "sound_played", True)
+        game.sound_played = False
+        game.score = 5
+        game.city.traffic.active = False
+        game._apply_car_hit(960, 540)
+        self.assertEqual(game.score, 5)
+        self.assertFalse(game.sound_played)
+
+    def test_burst_keeps_the_background_around_it(self) -> None:
+        flash = CarHitFlash()
+        flash.trigger(200, 200)
+        canvas = np.full((400, 400, 3), (10, 20, 30), dtype=np.uint8)
+        flash.draw(canvas)
+        changed = np.any(canvas != (10, 20, 30), axis=2)
+        self.assertGreater(int(np.count_nonzero(changed)), 100)
+        self.assertTrue(np.array_equal(canvas[0, 0], np.array((10, 20, 30), dtype=np.uint8)))
+
+    def test_hit_sound_is_a_short_wav(self) -> None:
+        sound = CarHitSound()
+        self.assertTrue(sound._ensure())
+        with wave.open(str(sound._path), "rb") as handle:
+            self.assertEqual(handle.getnchannels(), 1)
+            self.assertGreater(handle.getnframes(), 1000)
+
+    def test_score_is_drawn_at_the_top(self) -> None:
+        game = self._game()
+        game.score = 7
+        frame = np.zeros((120, 320, 3), dtype=np.uint8)
+        game._draw_hud(frame)
+        self.assertGreater(int(frame[0:40, 100:220].sum()), 0)
 
 
 class PlayerCutoutTest(unittest.TestCase):

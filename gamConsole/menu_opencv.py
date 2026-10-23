@@ -10,7 +10,6 @@ import cv2
 import numpy as np
 
 from gamConsole.child_processes import stop_all_games
-from gamConsole.cvgames_launcher import cvgames_binary, is_webcam_games_installed
 from gamConsole.game_sessions import GameSession, create_session
 from gamConsole.game_thumbnails import get_game_thumbnail
 from gamConsole.games_registry import GameEntry, games_for_menu
@@ -22,6 +21,7 @@ from gamConsole.opencv_ui import (
     draw_text,
     draw_text_centered,
     fit_frame,
+    game_point_from_canvas,
     measure_text,
     home_button_click,
     key_requests_home,
@@ -36,16 +36,19 @@ from gamConsole.opencv_ui import (
 WIN = "gamConsole"
 CANVAS_W = 960
 CANVAS_H = 840
-CARD_ALPHA = 0.62
-CARD = (22, 33, 62)
-CARD_SIDE = (18, 28, 52)
-CARD_SELECTED = (48, 72, 120)
-FG = (234, 234, 234)
-MUTED = (210, 210, 230)
-ACCENT = (80, 140, 255)
-PLAY_GREEN = (72, 210, 88)
-PLAY_GREEN_HI = (100, 255, 120)
-HEADER_ALPHA = 0.45
+# BGR. Lyseblå kort og mørkeblå tekst, så navnet kan læses.
+CARD_ALPHA = 0.84
+CARD = (248, 220, 190)
+CARD_SIDE = (252, 236, 214)
+CARD_SELECTED = (245, 210, 168)
+FG = (110, 70, 30)
+ACCENT = (220, 150, 60)
+CARD_BORDER = (210, 175, 120)
+THUMB_FILL = (255, 248, 236)
+THUMB_BORDER = (220, 180, 130)
+PLAY_BLUE = (235, 170, 70)
+PLAY_BLUE_HI = (255, 200, 110)
+TOAST_BG = (250, 232, 205)
 TITLE_SCALE = 0.52
 SELECTED_CARD_W = 268
 SELECTED_CARD_H = 300
@@ -53,7 +56,6 @@ SIDE_SCALE = 0.68
 CARD_PITCH = 210
 MAIN_PLAY_H = 80
 MAIN_PLAY_ICON_HALF_H = 34
-STATUS_H = 36
 
 
 @dataclass
@@ -105,8 +107,8 @@ def _paste_clipped(canvas: np.ndarray, sprite: np.ndarray, x0: int, y0: int) -> 
     dst_y1 = min(height, y0 + sprite_h)
     if dst_x1 <= dst_x0 or dst_y1 <= dst_y0:
         return
-    cv2.rectangle(canvas, (x0 - 2, y0 - 2), (x0 + sprite_w + 2, y0 + sprite_h + 2), (238, 240, 248), -1)
-    cv2.rectangle(canvas, (x0 - 2, y0 - 2), (x0 + sprite_w + 2, y0 + sprite_h + 2), (90, 100, 130), 2, cv2.LINE_AA)
+    cv2.rectangle(canvas, (x0 - 2, y0 - 2), (x0 + sprite_w + 2, y0 + sprite_h + 2), THUMB_FILL, -1)
+    cv2.rectangle(canvas, (x0 - 2, y0 - 2), (x0 + sprite_w + 2, y0 + sprite_h + 2), THUMB_BORDER, 2, cv2.LINE_AA)
     crop = sprite[src_y0 : src_y0 + (dst_y1 - dst_y0), src_x0 : src_x0 + (dst_x1 - dst_x0)]
     canvas[dst_y0:dst_y1, dst_x0:dst_x1] = crop
 
@@ -164,9 +166,9 @@ def _draw_carousel_card_at_offset(
     x2 = x1 + cw
     y2 = y1 + ch
     fill = CARD_SELECTED if selected else (CARD if card_hover else CARD_SIDE)
-    alpha = CARD_ALPHA if selected else 0.5
+    alpha = CARD_ALPHA if selected else 0.74
     _blend_rect(canvas, x1, y1, x2, y2, fill, alpha)
-    border = ACCENT if selected else (70, 80, 110)
+    border = ACCENT if selected else CARD_BORDER
     thickness = 3 if selected else 1
     cv2.rectangle(canvas, (x1, y1), (x2, y2), border, thickness, cv2.LINE_AA)
     reserved = 34 if selected else 8
@@ -183,7 +185,7 @@ def _draw_main_play_button(canvas: np.ndarray, y1: int, hover: bool) -> Tuple[in
     cy = y1 + MAIN_PLAY_H // 2
     half_h = MAIN_PLAY_ICON_HALF_H
     inset = 14
-    color = PLAY_GREEN_HI if hover else PLAY_GREEN
+    color = PLAY_BLUE_HI if hover else PLAY_BLUE
     tri = np.array(
         [
             [cx - inset, cy - half_h],
@@ -197,14 +199,6 @@ def _draw_main_play_button(canvas: np.ndarray, y1: int, hover: bool) -> Tuple[in
     return cx - inset - pad, cy - half_h - pad, cx + half_h + inset + pad, cy + half_h + pad
 
 
-def _status_line() -> str:
-    if cvgames_binary():
-        return "CvGames klar - samme vindue"
-    if is_webcam_games_installed():
-        return "Python-spil - Hjem-knap i spil"
-    return "Webcam-menu - Hjem-knap i spil"
-
-
 def _compose_menu(
     webcam: np.ndarray,
     games: List[GameEntry],
@@ -214,13 +208,11 @@ def _compose_menu(
     camera_index: int,
 ) -> Tuple[np.ndarray, MenuLayout]:
     canvas = cv2.resize(webcam, (CANVAS_W, CANVAS_H))
-    carousel_top = 88
-    main_play_y1 = CANVAS_H - QUIT_BAR_H - STATUS_H - MAIN_PLAY_H - 16
+    # Kamera-tallet tegnes ikke. Tasterne [ ] skifter stadig kamera.
+    del camera_index
+    carousel_top = 16
+    main_play_y1 = CANVAS_H - QUIT_BAR_H - MAIN_PLAY_H - 20
     center_y = carousel_top + (main_play_y1 - carousel_top) // 2
-
-    _blend_rect(canvas, 0, 0, CANVAS_W, 76, (18, 18, 32), HEADER_ALPHA)
-    draw_text(canvas, "gamConsole", (20, 10), scale=1.05, color=FG)
-    draw_text(canvas, "Pil venstre/højre - vælg spil", (20, 46), scale=0.52, color=MUTED)
 
     card_boxes: List[HitBox] = []
     draw_order = []
@@ -244,16 +236,6 @@ def _compose_menu(
         card_boxes.append(box)
 
     main_play = _draw_main_play_button(canvas, main_play_y1, hover_main_play)
-
-    _blend_rect(canvas, 0, CANVAS_H - QUIT_BAR_H - STATUS_H, CANVAS_W, CANVAS_H - QUIT_BAR_H, (16, 16, 28), 0.5)
-    draw_text(canvas, _status_line(), (16, CANVAS_H - QUIT_BAR_H - STATUS_H + 6), scale=0.48, color=MUTED)
-    draw_text(
-        canvas,
-        f"Kamera #{camera_index} - [ ] skift",
-        (CANVAS_W - 260, CANVAS_H - QUIT_BAR_H - STATUS_H + 6),
-        scale=0.48,
-        color=MUTED,
-    )
     return canvas, MenuLayout(card_boxes=card_boxes, main_play=main_play)
 
 
@@ -297,6 +279,7 @@ def run_opencv_menu() -> None:
     toast_frames = 0
     request_quit = False
     request_home = False
+    game_frame: Optional[Tuple[int, int]] = None
 
     def _go_home() -> None:
         nonlocal session, cap, toast, toast_frames
@@ -343,13 +326,19 @@ def run_opencv_menu() -> None:
             return
         if event != cv2.EVENT_LBUTTONDOWN:
             return
-        if quit_bar_click(canvas_h, iy):
+        if quit_bar_click(canvas_w, ix, iy):
             request_quit = True
             return
         if home_button_click(ix, iy) and session is not None:
             request_home = True
             return
         if session is not None:
+            #9 Spil igen ligger i Gurlis billede. Klikket regnes om til det billedes koordinater.
+            click = getattr(session, "on_click", None)
+            if click is not None and game_frame is not None:
+                point = game_point_from_canvas(ix, iy, game_frame[0], game_frame[1], canvas_w, canvas_h)
+                if point is not None:
+                    click(point[0], point[1])
             return
         if _point_in_rect(ix, iy, layout.main_play):
             _start_game(games[selected_idx])
@@ -379,11 +368,16 @@ def run_opencv_menu() -> None:
             canvas = fit_frame(raw, canvas_w, canvas_h)
             overlay_game_chrome(canvas, session.title)
             draw_quit_bar(canvas)
+            game_frame = (raw.shape[1], raw.shape[0])
             cv2.imshow(WIN, canvas)
             key = cv2.waitKey(1) & 0xFF
-            if key_requests_quit(key):
+            claims = getattr(session, "claims_key", None)
+            #9 Under navneskrivning skal q, h og m ind i navnet og ikke hjem eller luk.
+            if claims is not None and claims(key):
+                session.on_key(key)
+            elif key_requests_quit(key):
                 break
-            if key_requests_home(key):
+            elif key_requests_home(key):
                 _go_home()
             elif key not in (255, 0):
                 session.on_key(key)
@@ -400,8 +394,8 @@ def run_opencv_menu() -> None:
         )
 
         if toast_frames > 0:
-            _blend_rect(canvas, 24, CANVAS_H - QUIT_BAR_H - 88, CANVAS_W - 24, CANVAS_H - QUIT_BAR_H - 48, (30, 30, 50), 0.72)
-            draw_text(canvas, toast[:90], (36, CANVAS_H - QUIT_BAR_H - 72), scale=0.52, color=(240, 240, 240))
+            _blend_rect(canvas, 24, CANVAS_H - QUIT_BAR_H - 88, CANVAS_W - 24, CANVAS_H - QUIT_BAR_H - 48, TOAST_BG, 0.88)
+            draw_text(canvas, toast[:90], (36, CANVAS_H - QUIT_BAR_H - 72), scale=0.52, color=FG)
             toast_frames -= 1
 
         draw_quit_bar(canvas)

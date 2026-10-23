@@ -17,11 +17,11 @@ PREVIEW_W = 320
 PREVIEW_H = 240
 TICK_MS = 33
 
-BG = "#1a1a2e"
-BG_CARD = "#16213e"
-FG = "#eaeaea"
-FG_MUTED = "#a0a0b8"
-PREVIEW_BG = "#0f0f1a"
+BG = "#d4eeff"
+BG_CARD = "#eaf6ff"
+FG = "#1e466e"
+FG_MUTED = "#3d6f99"
+PREVIEW_BG = "#c5e4fb"
 
 
 class GamConsoleMenu:
