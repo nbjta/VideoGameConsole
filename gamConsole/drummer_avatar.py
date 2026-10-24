@@ -21,6 +21,7 @@ from gamConsole.jointed_figure import (
     Point,
     _rotate_pivot,
     cut_parts,
+    _paint,
     draw_parts,
     limb_tip,
     posed_layout,
@@ -158,20 +159,8 @@ _SAMPLE = {
     "shin_right": (301.0, 490.0),
     "head": (262.0, 132.0),
 }
-#22 Bøjningen åbner et kilehul. Cirklen er derfor bredere end selve lemmet dér.
-_FACTOR = {
-    "upper_left": 0.55,
-    "upper_right": 0.55,
-    "lower_left": 1.0,
-    "lower_right": 1.0,
-    "hand_left": 0.9,
-    "hand_right": 0.9,
-    "thigh_left": 0.8,
-    "thigh_right": 0.8,
-    "shin_left": 0.8,
-    "shin_right": 0.8,
-    "head": 0.55,
-}
+#30 Luft mellem det forstørrede hoved og ærmet, målt i billedets pixels.
+_HEAD_GAP = 6.0
 
 _LEGS = (L_HIP, R_HIP, L_KNEE, R_KNEE, L_ANKLE, R_ANKLE)
 _SHARED: Optional[Tuple] = None
@@ -199,12 +188,24 @@ class DrummerAvatar:
         self.right = right
         self.cx = _PELVIS[0]
         self.pixels = pixels
+        #28 Øverste pixel på lårene. Alt under er ben og shorts.
+        self.waist = _upper_body_end(self.parts)
+        #30 Hovedet vokser fra halsen, til ærmerne står i vejen.
+        self.head_growth = _head_growth(self.parts)
 
     def draw(self, canvas: np.ndarray, pose: Optional[BodyPose], box: Tuple[int, int, int, int]) -> None:
         seated = _seated(pose)
         origin_x, origin_y, scale = self.placement(box)
-        draw_parts(canvas, self.parts, seated, origin_x, origin_y, scale)
-        _draw_caps(canvas, self.parts, self.caps, seated, origin_x, origin_y, scale)
+        #31 Benene tegnes ikke. Deres ledcirkler er shorts og stak op over kanten.
+        body = {
+            name: part
+            for name, part in self.parts.items()
+            if name != "head" and not name.startswith("thigh") and not name.startswith("shin")
+        }
+        #31 Fem pixels. Færre lod den hvide streg blive på underarmen.
+        draw_parts(canvas, body, seated, origin_x, origin_y, scale, edge=5)
+        _draw_caps(canvas, body, self.caps, seated, origin_x, origin_y, scale)
+        _draw_head(canvas, self.parts, seated, origin_x, origin_y, scale, self.head_growth)
 
     def stick_tips(self, pose: Optional[BodyPose], box: Tuple[int, int, int, int]) -> Tuple[Point, Point]:
         """Hændernes spids i billedet. Billedet har ingen stikker."""
@@ -234,7 +235,7 @@ def _shared_cut() -> Tuple:
         body = _body_mask(image)
         parts = _cut_parts(image, body)
         parts = {name: _bake(part, _TURN.get(name, 0.0)) for name, part in parts.items()}
-        caps = _caps(image, body)
+        caps = _caps(image, body, parts)
         top, bottom, left, right = _bounds(parts, caps)
         pixels = {name: part.area for name, part in parts.items()}
         _SHARED = (parts, caps, top, bottom, left, right, pixels)
@@ -291,11 +292,12 @@ def _bake(part: BodyPart, clockwise: float) -> BodyPart:
     return BodyPart(part.name, sprite, alpha, origin, part.pivot, turn(part.tip, part.pivot, clockwise))
 
 
-def _caps(image: np.ndarray, body: np.ndarray) -> List[JointCap]:
+def _caps(image: np.ndarray, body: np.ndarray, parts: Dict[str, BodyPart]) -> List[JointCap]:
     caps: List[JointCap] = []
     for name in _JOINTS:
         point = _SAMPLE[name]
-        caps.append(JointCap(name, _color_at(image, body, point), _radius_at(body, point, _FACTOR[name])))
+        #30 Diameteren er lemmmets bredde ved leddet.
+        caps.append(JointCap(name, _color_at(image, body, point), _limb_radius(parts[name])))
     return caps
 
 
@@ -312,32 +314,95 @@ def _color_at(image: np.ndarray, body: np.ndarray, point: Point) -> Tuple[int, i
     return int(color[0]), int(color[1]), int(color[2])
 
 
-def _radius_at(body: np.ndarray, point: Point, factor: float) -> float:
-    #22 Bredden er den sammenhængende række, punktet ligger i.
-    x, y = int(round(point[0])), int(round(point[1]))
-    height, width = body.shape
-    y = min(max(y, 0), height - 1)
-    xs = np.where(body[y])[0]
-    if len(xs) == 0:
-        return 12.0
-    splits = np.where(np.diff(xs) > 2)[0]
-    start = 0
-    best = None
-    best_dist = 1e9
-    chunks = list(splits) + [len(xs) - 1]
-    for stop in chunks:
-        chunk = xs[start : stop + 1]
-        start = stop + 1
-        if len(chunk) < 2:
+#30
+def _limb_radius(part: BodyPart) -> float:
+    """Halv bredde ved leddet, så cirklens diameter er lemmmets bredde."""
+    ys, xs = np.where(part.alpha > 0.2)
+    if len(xs) < 6:
+        raise ValueError(f"{part.name} har ingen pixels")
+    local_x = part.pivot[0] - part.origin[0]
+    local_y = part.pivot[1] - part.origin[1]
+    dx = xs.astype(np.float32) - local_x
+    dy = ys.astype(np.float32) - local_y
+    bone_x = part.tip[0] - part.pivot[0]
+    bone_y = part.tip[1] - part.pivot[1]
+    length = float(np.hypot(bone_x, bone_y))
+    if length < 1.0:
+        perp = np.hypot(dx, dy)
+        band = perp <= 12.0
+    else:
+        along = (dx * bone_x + dy * bone_y) / length
+        perp = np.abs(dx * bone_y - dy * bone_x) / length
+        band = (along >= -4.0) & (along <= 12.0)
+    if int(band.sum()) < 6:
+        raise ValueError(f"{part.name} har ingen bredde ved leddet")
+    return float(np.percentile(perp[band], 90))
+
+
+#30
+def _head_growth(parts: Dict[str, BodyPart]) -> float:
+    """Hvor meget hovedet kan vokse, før det rammer de løftede ærmer."""
+    _angles, anchors = posed_layout(parts, None, 0.0, 0.0, 1.0)
+    neck = anchors["head"]
+    hx, hy = _part_points(parts["head"], neck)
+    half = max(float(neck[0] - hx.min()), float(hx.max() - neck[0]))
+    if half < 1.0:
+        raise ValueError("Hovedet har ingen bredde")
+    rooms: List[float] = []
+    for name in ("upper_left", "upper_right"):
+        wx, wy = _part_points(parts[name], anchors[name])
+        overlap = (wy >= hy.min()) & (wy <= hy.max())
+        if int(overlap.sum()) < 5:
             continue
-        center = float(chunk.mean())
-        dist = abs(center - x)
-        if dist < best_dist:
-            best_dist = dist
-            best = chunk
-    if best is None:
-        return 12.0
-    return max(8.0, float(best.max() - best.min()) * factor)
+        if name.endswith("left"):
+            room = float(neck[0] - wx[overlap].max()) - _HEAD_GAP
+        else:
+            room = float(wx[overlap].min() - neck[0]) - _HEAD_GAP
+        rooms.append(room / half)
+    if not rooms:
+        raise ValueError("Ærmerne ligger ikke ved hovedet")
+    return min(rooms)
+
+
+def _part_points(part: BodyPart, anchor: Point) -> Tuple[np.ndarray, np.ndarray]:
+    ys, xs = np.where(part.alpha > 0.2)
+    local_x = part.pivot[0] - part.origin[0]
+    local_y = part.pivot[1] - part.origin[1]
+    return anchor[0] + (xs - local_x), anchor[1] + (ys - local_y)
+
+
+def _draw_head(
+    canvas: np.ndarray,
+    parts: Dict[str, BodyPart],
+    pose: Optional[BodyPose],
+    origin_x: float,
+    origin_y: float,
+    scale: float,
+    growth: float,
+) -> None:
+    angles, anchors = posed_layout(parts, pose, origin_x, origin_y, scale)
+    covered = np.zeros(canvas.shape[:2], np.bool_)
+    #31 Samme fem pixels som på kroppen.
+    _paint(canvas, parts["head"], anchors["head"], scale * growth, angles.get("head", 0.0), covered, edge=5)
+
+
+#28
+def _upper_body_end(parts: Dict[str, BodyPart]) -> float:
+    """Øverste pixel på lårene, efter figuren er sat ned."""
+    _angles, anchors = posed_layout(parts, None, 0.0, 0.0, 1.0)
+    top: Optional[float] = None
+    for name in ("thigh_left", "thigh_right"):
+        part = parts[name]
+        anchor = anchors[name]
+        rows = np.where(part.alpha > 0.2)[0]
+        if len(rows) == 0:
+            continue
+        local_y = part.pivot[1] - part.origin[1]
+        world = float(anchor[1] + (rows.min() - local_y))
+        top = world if top is None else min(top, world)
+    if top is None:
+        raise ValueError("Trommeslageren har ingen lår")
+    return top
 
 
 def _bounds(parts: Dict[str, BodyPart], caps: List[JointCap]) -> Tuple[int, int, int, int]:
@@ -380,6 +445,9 @@ def _draw_caps(
         center = (int(round(anchor[0])), int(round(anchor[1])))
         radius = max(3, int(round(cap.radius * scale)))
         if center[0] < -radius or center[1] < -radius or center[0] > width + radius or center[1] > height + radius:
+            continue
+        #28 Hofte- og knæcirklerne er shorts. De må ikke stikke op over kanten.
+        if cap.part.startswith("thigh") or cap.part.startswith("shin"):
             continue
         cv2.circle(canvas, center, radius, cap.color, -1, cv2.LINE_AA)
 

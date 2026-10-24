@@ -13,25 +13,28 @@ from __future__ import annotations
 import argparse
 import math
 import time
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from gamConsole.drum_hero_setup import MEDIUM, Difficulty, DrumSetup, DrumSong
 from gamConsole.drum_track import DrumTrack
+from gamConsole.drum_voices import DrumVoices
+from gamConsole.jointed_figure import _shave_edge
+from gamConsole.leader_back_view import ChaseInCar, _cut_white_background
 from gamConsole.drummer_avatar import DrummerAvatar
 from gamConsole.flying_users_ar import WebcamARGame
-from gamConsole.game_audio import game_audio
 from gamConsole.pose_body_overlay import BodyPose, PoseBodyOverlay
 from gamConsole.round_score import HighScoreList, RoundScore, RoundScoreGame, highscore_file
 
-#13 Målt i en kasse på 216 px. Hvile rammer ikke. Slag ud til siden og slag ned gør.
-_MEASURED_SPAN = 216.0
-HIHAT_X = -26.8 / _MEASURED_SPAN
-HIHAT_Y = 68.7 / _MEASURED_SPAN
-SNARE_X = 35.4 / _MEASURED_SPAN
-SNARE_Y = 143.5 / _MEASURED_SPAN
+#28 Målt på overkroppens kasse i 640×360. Hvile rammer ikke.
+# Slag til siden rammer bækkenet. Slag ned rammer bundtrommen i underkanten.
+HIHAT_X = -0.1665
+HIHAT_Y = 0.3081
+SNARE_X = 0.0761
+SNARE_Y = 0.4152
 
 HIHAT, SNARE, TOM, CRASH = 0, 1, 2, 3
 DRUM_COUNT = 4
@@ -48,7 +51,21 @@ NOTE_TOP = 0.08
 HIGHWAY_END = 0.46
 LANE_FAR = 0.34
 DRUM_RADIUS = 0.046
-STICK_PAD = 0.042
+#26 Nederste trommer er større end bækkenerne.
+LOW_DRUM_RADIUS = 0.106
+#28 Rækkevidden er en del af vinduet. Slag ned ender under kanten og skal stadig ramme.
+STICK_REACH = 0.10
+#32 Lidt fladere end billedets egen højde.
+LOW_DRUM_FLAT = 0.85
+#32 Mindre end 1.35. Ringen ligger tæt på billedet.
+LOW_DRUM_LIGHT = 1.12
+#32 Additivt neon. 1.0 ville være den gamle dækkende cirkel.
+NEON_STRENGTH = 0.28
+NEON_HOT = 0.48
+LOW_DRUM_PATH = Path(__file__).resolve().parents[1] / "assets" / "drum_hero" / "low_drum.png"
+#33 Samme bredde som den gamle ellipse. Højden følger billedet.
+CYMBAL_WIDTH = 2.8
+CYMBAL_PATH = Path(__file__).resolve().parents[1] / "assets" / "drum_hero" / "cymbal.png"
 PATTERN = (SNARE, TOM, HIHAT, CRASH)
 
 #13 BGR. Samme rækkefølge som banerne.
@@ -96,17 +113,23 @@ class Drummer:
 
     def box(self, pose: Optional[BodyPose], width: int, height: int) -> Tuple[int, int, int, int]:
         stage = StageFrame(width, height)
-        #14 Kroppen står i bunden, så armene når sættet under banen.
-        body_h = max(72, int(round(height * 0.50)))
-        body_w = max(40, int(body_h * 0.42))
-        y2 = stage.floor_bottom
-        y1 = y2 - body_h
-        #13 Trommeslageren bliver stående. Hovedvippen flytter ikke figuren.
-        del pose
+        avatar = self.avatar
+        #28 Overkroppen fylder fra hero-banen til kanten. Benene ligger under billedet.
+        span_y = avatar.waist - avatar.top
+        span_x = avatar.right - avatar.left
+        scale = min(
+            (height - stage.floor_top) / span_y,
+            (stage.right - stage.left) / span_x,
+        )
+        y2 = height + (avatar.bottom - avatar.waist) * scale
+        y1 = y2 - (avatar.bottom - avatar.top) * scale
+        body_w = span_x * scale
         low = stage.left
         high = max(low, stage.right - body_w)
-        x1 = int(np.clip(width // 2 - body_w // 2, low, high))
-        return x1, y1, x1 + body_w, y2
+        x1 = float(np.clip(width / 2 - body_w / 2, low, high))
+        #13 Trommeslageren bliver stående. Hovedvippen flytter ikke figuren.
+        del pose
+        return int(round(x1)), int(round(y1)), int(round(x1 + body_w)), int(round(y2))
 
     def sticks(self, pose: Optional[BodyPose], width: int, height: int) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         return self.avatar.stick_tips(pose, self.box(pose, width, height))
@@ -196,6 +219,8 @@ class DrumKit:
         self.gains: List[object] = []
         self.difficulty = MEDIUM if difficulty is None else difficulty
         self.chart = DrumChart(self.difficulty)
+        #26 Hvert træf spiller trommens egen lyd.
+        self.voices = DrumVoices()
         self._width = 1
         self._height = 1
         self._last_now: Optional[float] = None
@@ -257,7 +282,8 @@ class DrumKit:
             if self._waiting(note, now) and _reaches(sticks[LANE_HAND[note.lane]], drum, pad):
                 self.score += NOTE_POINTS
                 self.gains.append(_point_gain(drum.x, drum.y, NOTE_POINTS))
-                game_audio.points(NOTE_POINTS)
+                #26 Ikke bib. Lyden følger den tromme, stikket ramte.
+                self.voices.hit(note.lane)
                 continue
             still.append(note)
         self.notes = still
@@ -298,7 +324,9 @@ class DrumKit:
         height, width = canvas.shape[:2]
         top = height * NOTE_TOP
         hit_y = height * HIGHWAY_END
-        pad = max(drum.radius for drum in self.drums) * 2.1
+        #27 Banens bredde følger den gamle nodestørrelse, ikke de store trommer.
+        mark = _highway_radius(height)
+        pad = mark * 2.1
         near_l = min(drum.x for drum in self.drums) - pad
         near_r = max(drum.x for drum in self.drums) + pad
         track = np.array(
@@ -330,7 +358,7 @@ class DrumKit:
             y0 = int(round(top))
             y1 = int(round(hit_y))
             cv2.line(canvas, (x0, y0), (x1, y1), _dim(drum.color, 0.75), 3, cv2.LINE_AA)
-            ring = max(7, int(round(drum.radius * 0.78)))
+            ring = max(7, int(round(mark * 0.78)))
             cv2.circle(canvas, (x1, y1), ring, drum.color if drum.lane in hot else _dim(drum.color, 0.85), 3, cv2.LINE_AA)
         cv2.line(canvas, (int(round(near_l)), int(round(hit_y))), (int(round(near_r)), int(round(hit_y))), (235, 235, 240), 3, cv2.LINE_AA)
         for note in self.notes:
@@ -340,7 +368,7 @@ class DrumKit:
         drum = self.drums[note.lane]
         travel = _travel(note, now)
         x, y = self.note_xy(note, now)
-        radius = max(5, int(round(drum.radius * (0.34 + 0.48 * travel))))
+        radius = _gem_radius(canvas.shape[0], travel)
         center = (int(round(x)), int(round(y)))
         cv2.circle(canvas, center, radius + 2, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(canvas, center, radius, drum.color, -1, cv2.LINE_AA)
@@ -563,7 +591,13 @@ def _stand(canvas: np.ndarray, drum: DrumPad) -> None:
 def _drums_around(drummer: Drummer, box: Tuple[int, int, int, int], height: int) -> List[DrumPad]:
     left, right = drummer.avatar.stick_tips(None, box)
     span = float(box[3] - box[1])
-    radius = max(12, int(round(height * DRUM_RADIUS)))
+    #25 Lilletromme og tam har deres egen, større radius.
+    radii = (
+        max(12, int(round(height * DRUM_RADIUS))),
+        max(18, int(round(height * LOW_DRUM_RADIUS))),
+        max(18, int(round(height * LOW_DRUM_RADIUS))),
+        max(12, int(round(height * DRUM_RADIUS))),
+    )
     spots = (
         (left[0] + span * HIHAT_X, left[1] + span * HIHAT_Y),
         (left[0] + span * SNARE_X, left[1] + span * SNARE_Y),
@@ -571,14 +605,23 @@ def _drums_around(drummer: Drummer, box: Tuple[int, int, int, int], height: int)
         (right[0] - span * HIHAT_X, right[1] + span * HIHAT_Y),
     )
     return [
-        DrumPad(lane, spot[0], spot[1], radius, DRUM_COLORS[lane], DRUM_KINDS[lane])
+        DrumPad(lane, spot[0], spot[1], radii[lane], DRUM_COLORS[lane], DRUM_KINDS[lane])
         for lane, spot in enumerate(spots)
     ]
 
 
+def _highway_radius(height: int) -> int:
+    #27 Samme størrelse som bækkenerne havde, før bundtrommerne blev større.
+    return max(12, int(round(height * DRUM_RADIUS)))
+
+
+def _gem_radius(height: int, travel: float) -> int:
+    return max(5, int(round(_highway_radius(height) * (0.34 + 0.48 * travel))))
+
+
 def _stick_reach(drummer: Drummer, pose: Optional[BodyPose], width: int, height: int) -> float:
-    box = drummer.box(pose, width, height)
-    return max(6.0, (box[3] - box[1]) * STICK_PAD)
+    del drummer, pose, width
+    return max(6.0, height * STICK_REACH)
 
 
 def _in_window(note: DrumNote, now: float, early: float = HIT_EARLY, late: float = HIT_LATE) -> bool:
@@ -593,22 +636,182 @@ def _dim(color: Tuple[int, int, int], factor: float) -> Tuple[int, int, int]:
     return tuple(int(channel * factor) for channel in color)  # type: ignore[return-value]
 
 
+def _neon(color: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    #32 Den stærkeste kanal trækkes op, så ringen lyser.
+    peak = max(color)
+    if peak < 1:
+        return color
+    return tuple(min(255, int(channel * 255 / peak)) for channel in color)  # type: ignore[return-value]
+
+
+def _neon_disk(
+    canvas: np.ndarray,
+    center: Tuple[int, int],
+    radius: int,
+    color: Tuple[int, int, int],
+    strength: float,
+) -> None:
+    if radius < 2:
+        return
+    x, y = center
+    height, width = canvas.shape[:2]
+    pad = max(2, radius // 4)
+    x0, x1 = max(0, x - radius - pad), min(width, x + radius + pad + 1)
+    y0, y1 = max(0, y - radius - pad), min(height, y + radius + pad + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    layer = np.zeros((y1 - y0, x1 - x0, 3), np.float32)
+    cv2.circle(layer, (x - x0, y - y0), radius, _neon(color), -1, cv2.LINE_AA)
+    layer = cv2.GaussianBlur(layer, (0, 0), max(1.0, radius * 0.12))
+    roi = canvas[y0:y1, x0:x1].astype(np.float32)
+    canvas[y0:y1, x0:x1] = np.clip(roi + layer * strength, 0, 255).astype(np.uint8)
+
+
+class LowDrumPicture:
+    """Billedet af lilletromme og tam. Hvid baggrund er væk."""
+
+    def __init__(self, path: Path) -> None:
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError(f"Kan ikke læse {path}")
+        self.bgr, self.alpha = _cut_white_background(image)
+        self._cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+
+    def draw(self, canvas: np.ndarray, x: float, y: float, width: int) -> None:
+        sprite = self._sprite(max(1, width))
+        bgr, alpha = sprite
+        left = int(round(x - bgr.shape[1] / 2))
+        top = int(round(y - bgr.shape[0] / 2))
+        ChaseInCar._blit(canvas, bgr, alpha, left, top)
+
+    def _sprite(self, width: int) -> Tuple[np.ndarray, np.ndarray]:
+        cached = self._cache.get(width)
+        if cached is not None:
+            return cached
+        height = max(1, int(round(width * self.bgr.shape[0] / self.bgr.shape[1] * LOW_DRUM_FLAT)))
+        bgr = cv2.resize(self.bgr, (width, height), interpolation=cv2.INTER_AREA)
+        alpha = cv2.resize(self.alpha, (width, height), interpolation=cv2.INTER_AREA)
+        #31 Samme fem pixels som på trommeslageren.
+        sprite = _shave_edge(bgr, alpha, 5)
+        self._cache[width] = sprite
+        return sprite
+
+
+_LOW_DRUM: Optional[LowDrumPicture] = None
+
+
+def _low_drum() -> LowDrumPicture:
+    global _LOW_DRUM
+    if _LOW_DRUM is None:
+        _LOW_DRUM = LowDrumPicture(LOW_DRUM_PATH)
+    return _LOW_DRUM
+
+
+def _cymbal_glow(alpha: np.ndarray) -> np.ndarray:
+    #33 Skiven fylder sin form, så 1.12 kun gav et par pixels. Randen udvides, til den ses.
+    height, width = alpha.shape
+    solid = (alpha > 0.15).astype(np.uint8)
+    reach = max(2, int(round(0.22 * max(height, width) / 2)))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach * 2 + 1, reach * 2 + 1))
+    grown = cv2.dilate(solid, kernel).astype(np.float32)
+    sigma = max(1.0, reach * 0.45)
+    pad = max(2, int(round(sigma * 3)))
+    padded = cv2.copyMakeBorder(grown, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
+    blurred = cv2.GaussianBlur(padded, (0, 0), sigma)
+    peak = float(blurred.max())
+    if peak > 0:
+        blurred /= peak
+    return blurred
+
+
+def _add_neon_mask(
+    canvas: np.ndarray,
+    mask: np.ndarray,
+    x: float,
+    y: float,
+    color: Tuple[int, int, int],
+    strength: float,
+) -> None:
+    glow_h, glow_w = mask.shape
+    left = int(round(x - glow_w / 2))
+    top = int(round(y - glow_h / 2))
+    height, width = canvas.shape[:2]
+    x0, y0 = max(0, left), max(0, top)
+    x1, y1 = min(width, left + glow_w), min(height, top + glow_h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    piece = mask[y0 - top:y0 - top + (y1 - y0), x0 - left:x0 - left + (x1 - x0)]
+    tint = np.array(_neon(color), np.float32) * strength
+    roi = canvas[y0:y1, x0:x1].astype(np.float32)
+    canvas[y0:y1, x0:x1] = np.clip(roi + piece[:, :, None] * tint, 0, 255).astype(np.uint8)
+
+
+#33 Billedet er bækkenet. Neonmasken er billedets form, lidt større.
+class CymbalPicture:
+    """Det gule bækken med knoppen. Neonet er banens farve."""
+
+    def __init__(self, path: Path) -> None:
+        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if image is None or image.ndim != 3 or image.shape[2] != 4:
+            raise ValueError(f"Kan ikke læse {path}")
+        self.bgr = image[:, :, :3]
+        self.alpha = image[:, :, 3].astype(np.float32) / 255.0
+        self._cache: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+    def draw(
+        self,
+        canvas: np.ndarray,
+        x: float,
+        y: float,
+        width: int,
+        color: Tuple[int, int, int],
+        strength: float,
+    ) -> None:
+        bgr, alpha, glow = self._sprite(max(1, width))
+        _add_neon_mask(canvas, glow, x, y, color, strength)
+        left = int(round(x - bgr.shape[1] / 2))
+        top = int(round(y - bgr.shape[0] / 2))
+        ChaseInCar._blit(canvas, bgr, alpha, left, top)
+
+    def _sprite(self, width: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        cached = self._cache.get(width)
+        if cached is not None:
+            return cached
+        height = max(1, int(round(width * self.bgr.shape[0] / self.bgr.shape[1])))
+        bgr = cv2.resize(self.bgr, (width, height), interpolation=cv2.INTER_AREA)
+        alpha = cv2.resize(self.alpha, (width, height), interpolation=cv2.INTER_AREA)
+        sprite = (bgr, alpha, _cymbal_glow(alpha))
+        self._cache[width] = sprite
+        return sprite
+
+
+_CYMBAL: Optional[CymbalPicture] = None
+
+
+def _cymbal() -> CymbalPicture:
+    global _CYMBAL
+    if _CYMBAL is None:
+        _CYMBAL = CymbalPicture(CYMBAL_PATH)
+    return _CYMBAL
+
+
 def _draw_drum(canvas: np.ndarray, drum: DrumPad, hot: bool) -> None:
     center = (int(round(drum.x)), int(round(drum.y)))
-    if hot:
-        glow = int(round(drum.radius * 1.7))
-        if drum.kind == "cymbal":
-            cv2.ellipse(canvas, center, (glow, max(4, int(glow * 0.5))), 0, 0, 360, _dim(drum.color, 0.45), -1, cv2.LINE_AA)
-        else:
-            cv2.circle(canvas, center, glow, _dim(drum.color, 0.45), -1, cv2.LINE_AA)
     if drum.kind == "cymbal":
-        axes = (int(round(drum.radius * 1.4)), max(4, int(round(drum.radius * 0.62))))
-        cv2.ellipse(canvas, center, axes, 0, 0, 360, drum.color, -1, cv2.LINE_AA)
-        cv2.ellipse(canvas, center, axes, 0, 0, 360, (255, 255, 255), 2, cv2.LINE_AA)
+        #33 Billedet ligger over neonet. Styrken er den samme som på trommerne.
+        _cymbal().draw(
+            canvas,
+            drum.x,
+            drum.y,
+            max(1, int(round(drum.radius * CYMBAL_WIDTH))),
+            drum.color,
+            NEON_HOT if hot else NEON_STRENGTH,
+        )
         return
-    cv2.circle(canvas, center, drum.radius, drum.color, -1, cv2.LINE_AA)
-    cv2.circle(canvas, center, drum.radius, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.circle(canvas, center, max(3, drum.radius // 2), (16, 16, 18), 2, cv2.LINE_AA)
+    #32 Neonring tæt på trommen. Scenen ses igennem den.
+    light = max(4, int(round(drum.radius * LOW_DRUM_LIGHT)))
+    _neon_disk(canvas, center, light, drum.color, NEON_HOT if hot else NEON_STRENGTH)
+    _low_drum().draw(canvas, drum.x, drum.y, drum.radius * 2)
 
 
 def _point_gain(x: float, y: float, value: int):

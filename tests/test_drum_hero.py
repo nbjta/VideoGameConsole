@@ -25,6 +25,7 @@ from gamConsole.drum_hero import (  # noqa: E402
     HIT_EARLY,
     HIT_LATE,
     LEAD,
+    LOW_DRUM_RADIUS,
     PATTERN,
     SNARE,
     TOM,
@@ -35,10 +36,13 @@ from gamConsole.drum_hero import (  # noqa: E402
     HitChart,
     StageBackdrop,
     StageFrame,
+    _draw_drum,
+    _gem_radius,
 )
 from gamConsole.drum_hero_session import DrumHeroSession  # noqa: E402
 from gamConsole.drum_hero_setup import EASY, HARD, MEDIUM, SONGS  # noqa: E402
 from gamConsole.drum_track import SONG_ARTIST, SONG_PATH, SONG_TITLE  # noqa: E402
+from gamConsole.drum_voices import HIT_DIR, HIT_FILES  # noqa: E402
 from gamConsole.flying_users_ar import WebcamARGame  # noqa: E402
 from gamConsole.games_registry import games_for_menu  # noqa: E402
 from gamConsole.menu_opencv import CANVAS_H, QUIT_BAR_H, _compose_menu  # noqa: E402
@@ -111,6 +115,12 @@ def _yellow(image: np.ndarray) -> np.ndarray:
     return (red > 200) & (green > 180) & (blue < 80)
 
 
+#28 Skjorten er rød. Shortsene er blå og må ikke være i billedet.
+def _shirt(image: np.ndarray) -> np.ndarray:
+    blue, green, red = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+    return (red > 140) & (red > green + 40) & (red > blue + 20)
+
+
 class DrumHeroMenuTest(unittest.TestCase):
     def test_registry_button_is_builtin(self) -> None:
         entry = next(game for game in games_for_menu() if game.id == "drum-hero")
@@ -155,8 +165,9 @@ class StageBackdropTest(unittest.TestCase):
         clear_thumbnail_cache()
         thumb = get_game_thumbnail("drum-hero", 96)
         self.assertEqual(thumb.shape[:2], (96, 96))
-        self.assertGreater(int(_shorts(thumb).sum()), 3)
+        #28 Shortsene er beskåret væk. Skjorten og hi-hatten viser figuren.
         self.assertGreater(int(_yellow(thumb).sum()), 3)
+        self.assertGreater(int(_shirt(thumb).sum()), 3)
 
 
 class DrummerMoveTest(unittest.TestCase):
@@ -198,10 +209,12 @@ class DrummerMoveTest(unittest.TestCase):
             "shin_right",
         ):
             self.assertGreater(drummer.avatar.pixels[name], 100)
-        #22 Ledcirklerne er lemmets bredde, ikke en klat hen over kroppen.
-        for cap in drummer.avatar.caps:
-            self.assertGreater(cap.radius, 8)
-            self.assertLess(cap.radius, 40)
+        #30 Cirklens diameter er lemmmets bredde, ikke en klat hen over armen.
+        caps = {cap.part: cap.radius for cap in drummer.avatar.caps}
+        self.assertLess(caps["hand_left"], 14)
+        self.assertLess(caps["lower_left"], 18)
+        self.assertGreater(caps["upper_left"], 11)
+        self.assertLess(abs(caps["hand_left"] - caps["hand_right"]), 2)
 
     #22 Hvilen sidder med knæene ude og hænderne over skuldrene.
     def test_rest_pose_sits_with_the_arms_up(self) -> None:
@@ -225,13 +238,32 @@ class DrummerMoveTest(unittest.TestCase):
         self.assertGreater(down[0][1], rest[0][1] + 8)
         self.assertGreater(down[1][1], rest[1][1] + 8)
 
+    #28 Kun overkroppen ses, og den fylder fra banen ned til kanten.
+    def test_only_the_upper_body_fills_the_stage(self) -> None:
+        drummer = Drummer()
+        frame = np.zeros((360, 640, 3), np.uint8)
+        drummer.draw(frame, None)
+        self.assertEqual(int(_shorts(frame).sum()), 0)
+        self.assertGreater(int(_shirt(frame).sum()), 400)
+        box = drummer.box(None, 640, 360)
+        self.assertGreater(box[2] - box[0], 200)
+        _origin_x, origin_y, scale = drummer.avatar.placement(box)
+        head = origin_y + drummer.avatar.top * scale
+        hem = origin_y + drummer.avatar.waist * scale
+        self.assertAlmostEqual(head, 360 * HIGHWAY_END, delta=2)
+        self.assertAlmostEqual(hem, 360, delta=2)
+        #30 Hovedet er vokset, men det rammer ikke ærmerne.
+        self.assertGreater(drummer.avatar.head_growth, 1.2)
+        self.assertLess(drummer.avatar.head_growth, 1.45)
+
     def test_figure_stays_when_the_head_tilts(self) -> None:
         drummer = Drummer()
         level = np.zeros((360, 640, 3), np.uint8)
         tilted = level.copy()
         drummer.draw(level, _ears((220, 90), (300, 90)))
         drummer.draw(tilted, _ears((220, 70), (300, 150)))
-        self.assertEqual(_mass_x(tilted), _mass_x(level))
+        #28 Hovedet dækker nogle skjortepixels, men kroppen står.
+        self.assertEqual(_shirt_span(tilted), _shirt_span(level))
 
 
 class DrumHitTest(unittest.TestCase):
@@ -255,6 +287,45 @@ class DrumHitTest(unittest.TestCase):
             #14 Hele trommen sidder under hero-stregen.
             self.assertGreater(drum.y - drum.radius, line)
             self.assertLess(drum.y, 360 - drum.radius)
+        #26 Bundtrommerne er større, højere oppe, og der er luft imellem dem.
+        self.assertGreater(snare.radius, hihat.radius)
+        self.assertGreater(tom.radius, crash.radius)
+        self.assertGreater(tom.x - snare.x, snare.radius + tom.radius)
+        #28 Bundtrommen står i underkanten, der hvor slaget ned ender.
+        self.assertGreater(snare.y, 360 * 0.75)
+
+    def test_highway_notes_keep_the_old_size(self) -> None:
+        arrived = _gem_radius(360, 1.0)
+        low = max(18, int(round(360 * LOW_DRUM_RADIUS)))
+        self.assertLess(arrived * 2, low)
+        drummer = Drummer()
+        kit = DrumKit()
+        kit.place(drummer, None, 640, 360)
+        kit.add_note(SNARE, 1.0)
+        kit.add_note(HIHAT, 1.0)
+        frame = np.zeros((360, 640, 3), np.uint8)
+        kit.paint(frame, drummer, None, 1.0, hud=False)
+        line = int(360 * HIGHWAY_END)
+        band = frame[line - 22:line]
+        red = (band[:, :, 2] > 200) & (band[:, :, 1] < 80)
+        yellow = (band[:, :, 1] > 200) & (band[:, :, 2] > 200) & (band[:, :, 0] < 40)
+        self.assertGreater(int(red.sum()), 20)
+        self.assertLess(abs(int(red.sum()) - int(yellow.sum())), 40)
+
+    def test_a_hit_plays_that_drums_sound(self) -> None:
+        snare = _kit_at(SNARE, _down(), 1.0)
+        self.assertEqual(snare.voices.played, [SNARE])
+        hihat = _kit_at(HIHAT, _side(), 1.0)
+        self.assertEqual(hihat.voices.played, [HIHAT])
+        tom = _kit_at(TOM, _down(), 1.0)
+        self.assertEqual(tom.voices.played, [TOM])
+        crash = _kit_at(CRASH, _side(), 1.0)
+        self.assertEqual(crash.voices.played, [CRASH])
+        missed = _kit_at(SNARE, _side(), 1.0)
+        self.assertEqual(missed.score, 0)
+        self.assertEqual(missed.voices.played, [])
+        for name in HIT_FILES:
+            self.assertGreater((HIT_DIR / name).stat().st_size, 1000)
 
     def test_each_drum_has_its_own_color(self) -> None:
         drummer = Drummer()
@@ -263,11 +334,39 @@ class DrumHitTest(unittest.TestCase):
         frame = np.zeros((360, 640, 3), np.uint8)
         kit.paint(frame, drummer, None, 0.0, hud=False)
         seen = set()
+        shells = []
         for drum in kit.drums:
-            pixel = frame[int(round(drum.y)), int(round(drum.x))]
-            self.assertTrue(_near(pixel, DRUM_COLORS[drum.lane]))
+            center = frame[int(round(drum.y)), int(round(drum.x))]
+            if drum.kind == "cymbal":
+                #33 Midten er det gule billede. Neonet ligger ved siden af og er svagere end banens farve.
+                self.assertGreater(int(center[2]), 160)
+                self.assertLess(int(center[0]), 120)
+                self.assertFalse(_near(center, DRUM_COLORS[drum.lane], tol=40))
+                glow = np.zeros_like(frame)
+                _draw_drum(glow, drum, False)
+                ring = glow[int(round(drum.y)), int(round(drum.x + drum.radius))]
+                outside = glow[int(round(drum.y)), int(round(drum.x + drum.radius * 2.2))]
+                peak = int(np.argmax(DRUM_COLORS[drum.lane]))
+                self.assertEqual(int(np.argmax(ring)), peak)
+                self.assertGreater(int(ring[peak]), int(outside.max()) + 15)
+                self.assertLess(int(ring[peak]), int(DRUM_COLORS[drum.lane][peak]) // 2)
+            else:
+                #32 Billedet ligger i midten. Neonringen er svagere end den gamle cirkel.
+                self.assertGreater(int(center[2]), 140)
+                self.assertFalse(_near(center, DRUM_COLORS[drum.lane], tol=40))
+                glow = np.zeros_like(frame)
+                kit._draw_drums(glow, 0.0)
+                ring_x = int(round(drum.x + drum.radius * 1.05))
+                ring = glow[int(round(drum.y)), ring_x]
+                outside = glow[int(round(drum.y)), int(round(drum.x + drum.radius * 1.6))]
+                self.assertGreater(int(ring.max()), int(outside.max()) + 25)
+                peak = int(np.argmax(DRUM_COLORS[drum.lane]))
+                self.assertEqual(int(np.argmax(ring)), peak)
+                self.assertLess(int(ring[peak]), int(DRUM_COLORS[drum.lane][peak]) // 2)
+                shells.append(center)
             seen.add(drum.lane)
         self.assertEqual(len(seen), DRUM_COUNT)
+        self.assertLess(int(np.abs(shells[0].astype(int) - shells[1].astype(int)).max()), 30)
 
     def test_ready_sticks_score_nothing(self) -> None:
         for lane in range(DRUM_COUNT):
@@ -585,11 +684,12 @@ def _near(pixel: np.ndarray, color: tuple, tol: int = 12) -> bool:
     return all(abs(int(pixel[channel]) - color[channel]) <= tol for channel in range(3))
 
 
-def _mass_x(image: np.ndarray) -> float:
-    xs = np.where(_shorts(image))[1]
+#28 Kroppen måles på skjorten. Shortsene ligger under kanten.
+def _shirt_span(image: np.ndarray) -> tuple:
+    xs = np.where(_shirt(image))[1]
     if len(xs) == 0:
-        raise AssertionError("shortsene blev ikke tegnet")
-    return float(xs.mean())
+        raise AssertionError("skjorten blev ikke tegnet")
+    return int(xs.min()), int(xs.max())
 
 
 if __name__ == "__main__":

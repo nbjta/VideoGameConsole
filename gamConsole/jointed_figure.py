@@ -173,6 +173,7 @@ def draw_parts(
     origin_x: float,
     origin_y: float,
     scale: float,
+    edge: int = 0,
 ) -> None:
     angles, anchors = posed_layout(parts, pose, origin_x, origin_y, scale)
     covered = np.zeros(canvas.shape[:2], np.bool_)
@@ -180,7 +181,7 @@ def draw_parts(
         part = parts.get(name)
         if part is None:
             continue
-        _paint(canvas, part, anchors[name], scale, angles.get(name, 0.0), covered)
+        _paint(canvas, part, anchors[name], scale, angles.get(name, 0.0), covered, edge)
     for name in DRAW_ORDER:
         part = parts.get(name)
         if part is None:
@@ -467,6 +468,7 @@ def _paint(
     scale: float,
     clockwise: float,
     covered: np.ndarray,
+    edge: int = 0,
 ) -> None:
     src_h, src_w = part.bgr.shape[:2]
     width = max(1, int(round(src_w * scale)))
@@ -476,10 +478,21 @@ def _paint(
     pivot = ((part.pivot[0] - part.origin[0]) * width / src_w, (part.pivot[1] - part.origin[1]) * height / src_h)
     if abs(clockwise) > 0.4:
         sprite, alpha, pivot = _rotate_pivot(sprite, alpha, pivot, -clockwise)
+    if edge > 0:
+        sprite, alpha = _shave_edge(sprite, alpha, edge)
     x = int(round(anchor[0] - pivot[0]))
     y = int(round(anchor[1] - pivot[1]))
     ChaseInCar._blit(canvas, sprite, alpha, x, y)
     _cover(covered, alpha, x, y)
+
+
+#31 Målt i 960×540. Ærmet har fire hvide pixels, underarmen fem.
+def _shave_edge(bgr: np.ndarray, alpha: np.ndarray, pixels: int) -> Tuple[np.ndarray, np.ndarray]:
+    solid = (alpha > 0.15).astype(np.uint8)
+    size = pixels * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    kept = cv2.erode(solid, kernel, iterations=1)
+    return bgr, kept.astype(np.float32)
 
 
 def _cover(covered: np.ndarray, alpha: np.ndarray, x: int, y: int) -> None:
