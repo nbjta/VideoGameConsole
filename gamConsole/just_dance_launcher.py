@@ -5,17 +5,10 @@ import subprocess
 import sys
 
 from gamConsole.child_processes import register_child
+from gamConsole.just_dance_songs import resolve_song
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT / "vendor" / "just-dance"
-
-SONGS = (
-    "cheapthrills",
-    "callmemaybe",
-    "uptownfunk",
-    "ghungroo",
-    "dontstartnow",
-)
 
 
 def is_installed() -> bool:
@@ -30,8 +23,7 @@ def launch(song: str = "cheapthrills", camera: int = 0) -> Tuple[bool, str]:
     if not is_installed():
         return False, f"just-dance er ikke klonet.\n\n{setup_hint()}"
 
-    if song not in SONGS:
-        song = "cheapthrills"
+    song = resolve_song(song)
 
     model = REPO / "model" / "model.tflite"
     video = REPO / "songs" / f"{song}.mp4"

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from gamConsole.just_dance_stage import JustDanceStage
 from gamConsole.opencv_ui import (
     QUIT_BAR_H,
     draw_quit_bar,
@@ -52,63 +53,70 @@ def _process_frames_with_quit(self: "JustDanceController") -> None:
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN, DISPLAY_W, DISPLAY_H)
     cv2.setMouseCallback(WIN, on_mouse)
+    stage = JustDanceStage()
 
-    while self.cap1.isOpened() and not stop:
-        if window_was_closed(WIN):
-            break
+    try:
+        while self.cap1.isOpened() and not stop:
+            if window_was_closed(WIN):
+                break
 
-        start_time = time.time()
-        ok1, frame1 = self.cap1.read()
-        ok2, frame2 = self.cap2.read()
-        if not ok1 or frame1 is None:
-            break
-        if not ok2 or frame2 is None:
-            frame2 = np.zeros_like(frame1)
+            start_time = time.time()
+            ok1, frame1 = self.cap1.read()
+            ok2, frame2 = self.cap2.read()
+            if not ok1 or frame1 is None:
+                break
+            camera_ok = ok2 and frame2 is not None
+            if not camera_ok:
+                frame2 = np.zeros_like(frame1)
+            else:
+                frame2 = cv2.flip(frame2, 1)
 
-        frame2 = cv2.flip(frame2, 1)
+            if counter == 0:
+                key_points_with_scores_video = self.process_frame(frame1)
+                key_points_with_scores_camera = self.process_frame(frame2)
+                self.model.store_angles(self.angles_video, frame2, key_points_with_scores_video)
+                self.model.store_angles(self.angles_camera, frame2, key_points_with_scores_camera)
 
-        if counter == 0:
-            key_points_with_scores_video = self.process_frame(frame1)
-            key_points_with_scores_camera = self.process_frame(frame2)
-            self.model.store_angles(self.angles_video, frame2, key_points_with_scores_video)
-            self.model.store_angles(self.angles_camera, frame2, key_points_with_scores_camera)
+            counter = (counter + 1) % 100
+            if camera_ok:
+                frame2 = stage.composite(frame2)
 
-        counter = (counter + 1) % 100
+            height1, _, _ = frame1.shape
+            height2, width2, _ = frame2.shape
+            if height1 != height2:
+                scale_factor = height1 / height2
+                width2 = int(width2 * scale_factor)
+                frame2 = cv2.resize(frame2, (width2, height1))
 
-        height1, _, _ = frame1.shape
-        height2, width2, _ = frame2.shape
-        if height1 != height2:
-            scale_factor = height1 / height2
-            width2 = int(width2 * scale_factor)
-            frame2 = cv2.resize(frame2, (width2, height1))
+            combined_frame = np.concatenate((frame1, frame2), axis=1)
+            content_h = max(1, frame_h)
+            combined_frame = cv2.resize(combined_frame, (DISPLAY_W, content_h))
 
-        combined_frame = np.concatenate((frame1, frame2), axis=1)
-        content_h = max(1, frame_h)
-        combined_frame = cv2.resize(combined_frame, (DISPLAY_W, content_h))
+            canvas = np.zeros((DISPLAY_H, DISPLAY_W, 3), dtype=np.uint8)
+            canvas[:content_h, :] = combined_frame
+            draw_quit_bar(canvas)
+            cv2.putText(
+                canvas,
+                "LUK nederst | Q / Esc",
+                (16, 28),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.imshow(WIN, canvas)
 
-        canvas = np.zeros((DISPLAY_H, DISPLAY_W, 3), dtype=np.uint8)
-        canvas[:content_h, :] = combined_frame
-        draw_quit_bar(canvas)
-        cv2.putText(
-            canvas,
-            "LUK nederst | Q / Esc",
-            (16, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        cv2.imshow(WIN, canvas)
+            key = cv2.waitKey(1) & 0xFF
+            if key_requests_quit(key):
+                break
 
-        key = cv2.waitKey(1) & 0xFF
-        if key_requests_quit(key):
-            break
-
-        elapsed_time = time.time() - start_time
-        rate = self.frame1_rate or 30.0
-        frame_delay = max(1, int(1000 / rate) - int(elapsed_time * 1000))
-        time.sleep(frame_delay / 1000.0)
+            elapsed_time = time.time() - start_time
+            rate = self.frame1_rate or 30.0
+            frame_delay = max(1, int(1000 / rate) - int(elapsed_time * 1000))
+            time.sleep(frame_delay / 1000.0)
+    finally:
+        stage.close()
 
 
 def apply_just_dance_quit_patch() -> None:

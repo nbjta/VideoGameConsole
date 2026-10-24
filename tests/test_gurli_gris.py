@@ -29,6 +29,7 @@ from gamConsole.gurli_gris import (  # noqa: E402
     GurliGrisBackdrop,
     GurliGrisFigure,
     GurliGrisGame,
+    SONG_PATH,
     SoapBubble,
     _hold_branch,
 )
@@ -469,6 +470,33 @@ class GurliRoundPlayTest(unittest.TestCase):
                 self.assertEqual(game.match.round.started_at, 9000)
             finally:
                 game.close()
+
+    #19
+    def test_song_plays_for_the_round_and_stops_on_the_result(self) -> None:
+        self.assertTrue(SONG_PATH.is_file())
+        self.assertGreater(SONG_PATH.stat().st_size, 1_000_000)
+        with tempfile.TemporaryDirectory() as folder:
+            game = GurliGrisGame(camera=0, scores=HighScoreList(Path(folder) / "scores.json"))
+            try:
+                frame = np.zeros((180, 320, 3), dtype=np.uint8)
+                self.assertFalse(game.track.started)
+                game.on_frame(frame, now=1000.0)
+                self.assertTrue(game.track.started)
+                self.assertIsNone(game.track._sound)
+                ended = game.on_frame(frame, now=1000.0 + ROUND_SECONDS)
+                self.assertFalse(game.track.started)
+                assert game.match.result is not None
+                assert game.match.result.button.rect is not None
+                x1, y1, x2, y2 = game.match.result.button.rect
+                self.assertGreater(int(ended.sum()), 0)
+                game.on_click((x1 + x2) // 2, (y1 + y2) // 2)
+                again = game.on_frame(frame, now=2000.0)
+                self.assertIsNone(game.match.result)
+                self.assertTrue(game.track.started)
+                self.assertGreater(int(again.sum()), 0)
+            finally:
+                game.close()
+                self.assertFalse(game.track.started)
 
 
 if __name__ == "__main__":

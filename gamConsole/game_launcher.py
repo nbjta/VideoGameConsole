@@ -40,9 +40,28 @@ def launch_game_entry(entry: GameEntry, camera: int = 0) -> Tuple[bool, str]:
         from gamConsole.tilt_of_time_launcher import launch as launch_tilt
 
         return launch_tilt(camera)
+    #10
+    if entry.launcher == "builtin" and entry.mode_arg == "mars_rover":
+        return _start_module("gamConsole.mars_rover", entry.title, camera)
     if entry.launcher == "builtin":
         return _launch_python_module(entry, camera)
     return launch_game(entry.mode_arg or "", camera)
+
+
+#10
+def _start_module(module: str, title: str, camera: int) -> Tuple[bool, str]:
+    cmd = [
+        sys.executable,
+        "-m",
+        module,
+        f"--camera={camera}",
+    ]
+    try:
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), env=None)
+        register_child(proc)
+    except OSError as exc:
+        return False, f"Kunne ikke starte spil: {exc}"
+    return True, f"Startede {title}. Luk spilvindue nederst (LUK) eller Q."
 
 
 def _launch_python_module(entry: GameEntry, camera: int) -> Tuple[bool, str]:
@@ -50,6 +69,12 @@ def _launch_python_module(entry: GameEntry, camera: int) -> Tuple[bool, str]:
         "flying_users": "gamConsole.flying_users_ar",
         #9
         "gurli_gris": "gamConsole.gurli_gris",
+        #11
+        "maalmand": "gamConsole.maalmand",
+        #12
+        "boksning": "gamConsole.boksning",
+        #13
+        "drum_hero": "gamConsole.drum_hero",
     }
     module = modules.get(entry.mode_arg or "")
     if module is None:

@@ -19,6 +19,8 @@ class FlyingUsersSession(RoundScoreSession):
         self.cap = cv2.VideoCapture(camera)
 
     def stop(self) -> None:
+        #21 Sangen stopper, når spillet forlades.
+        self.game.close()
         if self.cap.isOpened():
             self.cap.release()
 

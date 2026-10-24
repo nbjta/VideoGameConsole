@@ -7,6 +7,10 @@ from typing import Optional, Protocol, Tuple, Union
 from gamConsole.builtin_sessions import BuiltinSession
 from gamConsole.flying_users_session import FlyingUsersSession
 from gamConsole.gurli_gris_session import GurliGrisSession
+from gamConsole.boksning_session import BoksningSession
+from gamConsole.drum_hero_session import DrumHeroSession
+from gamConsole.maalmand_session import MaalmandSession
+from gamConsole.mars_rover_session import MarsRoverSession
 from gamConsole.games_registry import GameEntry
 from gamConsole.handora_session import HandoraSession
 from gamConsole.just_dance_session import JustDanceSession
@@ -17,6 +21,10 @@ GameSession = Union[
     BuiltinSession,
     FlyingUsersSession,
     GurliGrisSession,
+    BoksningSession,
+    DrumHeroSession,
+    MaalmandSession,
+    MarsRoverSession,
     HandoraSession,
     JustDanceSession,
     TiltOfTimeSession,
@@ -34,7 +42,7 @@ class SessionProtocol(Protocol):
     def on_key(self, key: int) -> None: ...
 
 
-def create_session(entry: GameEntry, camera: int) -> Tuple[Optional[GameSession], str]:
+def create_session(entry: GameEntry, camera: int, song: Optional[str] = None) -> Tuple[Optional[GameSession], str]:
     #6
     if entry.launcher == "handora":
         session = HandoraSession(camera)
@@ -44,14 +52,27 @@ def create_session(entry: GameEntry, camera: int) -> Tuple[Optional[GameSession]
         session = WiiSportsSession(camera)
         return session, session.message
     if entry.launcher == "just_dance":
-        return JustDanceSession(entry.mode_arg or "cheapthrills", camera), "Just Dance klar."
+        del song
+        return JustDanceSession(camera), "Vælg en sang i Just Dance."
     #2
     if entry.launcher == "tilt_of_time":
         session = TiltOfTimeSession(camera)
         return session, session.message
+    #10
+    if entry.launcher == "builtin" and entry.mode_arg == "mars_rover":
+        return MarsRoverSession(camera), f"{entry.title} klar."
     #9
     if entry.launcher == "builtin" and entry.mode_arg == "gurli_gris":
         return GurliGrisSession(camera), f"{entry.title} klar."
+    #11
+    if entry.launcher == "builtin" and entry.mode_arg == "maalmand":
+        return MaalmandSession(camera), f"{entry.title} klar."
+    #12
+    if entry.launcher == "builtin" and entry.mode_arg == "boksning":
+        return BoksningSession(camera), f"{entry.title} klar."
+    #13
+    if entry.launcher == "builtin" and entry.mode_arg == "drum_hero":
+        return DrumHeroSession(camera), f"{entry.title} klar."
     if entry.launcher == "builtin" and entry.mode_arg == "flying_users":
         return FlyingUsersSession(camera), f"{entry.title} klar."
     if entry.launcher == "builtin" or entry.launcher == "cvgames":

@@ -38,6 +38,53 @@ def _render_flying_users(width: int, height: int) -> np.ndarray:
     return city.render(width, height)
 
 
+#11
+def _render_maalmand(width: int, height: int) -> np.ndarray:
+    from gamConsole.maalmand import GoalBackdrop
+
+    return GoalBackdrop().render(width, height)
+
+
+#12
+def _render_boksning(width: int, height: int) -> np.ndarray:
+    from gamConsole.boksning import Boxer, MusicTarget, RingBackdrop
+
+    frame = RingBackdrop().render(width, height)
+    boxer = Boxer()
+    target = MusicTarget()
+    target.place(boxer, width, height)
+    target.light(0, 0.0)
+    target.draw_back(frame, 0.0)
+    boxer.draw(frame, None)
+    target.draw_pads(frame, 0.0)
+    return frame
+
+
+#13
+def _render_drum_hero(width: int, height: int) -> np.ndarray:
+    from gamConsole.drum_hero import HIHAT, LEAD, DrumKit, Drummer, StageBackdrop
+
+    frame = StageBackdrop().render(width, height)
+    drummer = Drummer()
+    kit = DrumKit()
+    kit.place(drummer, None, width, height)
+    kit.add_note(HIHAT, LEAD * 0.45)
+    kit.paint(frame, drummer, None, 0.0, hud=False)
+    return frame
+
+
+#10
+def _render_mars_rover(width: int, height: int) -> np.ndarray:
+    from gamConsole.mars_rover import MarsRoverBuildScene
+
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    scene = MarsRoverBuildScene()
+    scene.preview = True
+    scene.place_all_for_preview()
+    scene.draw(frame)
+    return frame
+
+
 #8
 def _render_husbygning(width: int, height: int) -> np.ndarray:
     from gamConsole.house_build import HouseBuildScene
@@ -77,12 +124,15 @@ def _render_debug(width: int, height: int) -> np.ndarray:
 
 
 def _render_just_dance(width: int, height: int) -> np.ndarray:
-    frame = np.zeros((height, width, 3), dtype=np.uint8)
-    frame[:] = (40, 20, 30)
-    cx, cy = width // 2, int(height * 0.38)
-    cv2.line(frame, (cx, cy), (cx, cy + int(height * 0.32)), (255, 180, 220), 4, cv2.LINE_AA)
-    cv2.line(frame, (cx, cy + 8), (int(width * 0.3), int(height * 0.55)), (255, 180, 220), 3, cv2.LINE_AA)
-    cv2.line(frame, (cx, cy + 8), (int(width * 0.7), int(height * 0.48)), (255, 180, 220), 3, cv2.LINE_AA)
+    from gamConsole.disco_backdrop import DiscoBackdrop
+
+    backdrop = DiscoBackdrop()
+    backdrop.t = 18.0
+    frame = backdrop.render(width, height)
+    cx, cy = width // 2, int(height * 0.34)
+    cv2.line(frame, (cx, cy), (cx, cy + int(height * 0.28)), (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.line(frame, (cx, cy + 6), (int(width * 0.3), int(height * 0.5)), (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.line(frame, (cx, cy + 6), (int(width * 0.7), int(height * 0.44)), (255, 255, 255), 2, cv2.LINE_AA)
     return frame
 
 
@@ -123,6 +173,10 @@ _SCENE_RENDERERS: Dict[str, RenderFn] = {
     "gurli-gris": _render_gurli_gris,
     "flying-users-ar": _render_flying_users,
     "webcam-3d": _render_husbygning,
+    "mars-rover": _render_mars_rover,
+    "maalmand": _render_maalmand,
+    "boksning": _render_boksning,
+    "drum-hero": _render_drum_hero,
     "webcam-bub": _render_bubbles,
     "webcam-debug": _render_debug,
     "just-dance": _render_just_dance,

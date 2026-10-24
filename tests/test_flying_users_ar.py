@@ -20,7 +20,9 @@ from gamConsole.flying_users_ar import (  # noqa: E402
     WristThrowDetector,
     CarHitFlash,
     CarHitSound,
+    KittenBurgerSplash,
     FlyingUsersARGame,
+    SONG_PATH,
     ThrowEvent,
     ThrownBurger,
     blit_circle,
@@ -48,16 +50,16 @@ from gamConsole.leader_back_view import player_car_box  # noqa: E402
 
 class StreetKittenMotionTest(unittest.TestCase):
     def _kitten(self) -> StreetKitten:
-        return StreetKitten(0.0, 2.0, 0, 1, (40, 145, 230), (40, 45, 230))
+        return StreetKitten(0.0, 2.0, 0, 1, (40, 145, 230))
 
     def test_enters_from_left_toward_center(self) -> None:
-        kitten = StreetKitten(0.0, 2.0, 0, 1, (40, 145, 230), (40, 45, 230), enter_from_left=True)
+        kitten = StreetKitten(0.0, 2.0, 0, 1, (40, 145, 230), enter_from_left=True)
         x0 = kitten.x_on(0.0, 320)
         x1 = kitten.x_on(20.0, 320)
         self.assertGreater(x1, x0)
 
     def test_enters_from_right_toward_center(self) -> None:
-        kitten = StreetKitten(0.0, 2.0, 0, 1, (40, 145, 230), (40, 45, 230), enter_from_left=False)
+        kitten = StreetKitten(0.0, 2.0, 0, 1, (40, 145, 230), enter_from_left=False)
         x0 = kitten.x_on(0.0, 320)
         x1 = kitten.x_on(20.0, 320)
         self.assertLess(x1, x0)
@@ -91,7 +93,7 @@ class StreetKittenMotionTest(unittest.TestCase):
 
 def _drawn_kitten_height(scale: float) -> int:
     canvas = np.zeros((480, 640, 3), dtype=np.uint8)
-    draw_kitten_side(canvas, 320, 360, (40, 145, 230), (40, 45, 230), 0.0, scale=scale)
+    draw_kitten_side(canvas, 320, 360, (40, 145, 230), 0.0, scale=scale)
     rows = np.where(np.any(canvas > 10, axis=2))[0]
     return int(rows.max() - rows.min() + 1)
 
@@ -233,7 +235,7 @@ class MenuThumbnailTest(unittest.TestCase):
 
 class FlyingUsersHelpersTest(unittest.TestCase):
     def test_kitten_sprite_is_bgr_image(self) -> None:
-        img = make_kitten_sprite((40, 145, 230), (40, 45, 230))
+        img = make_kitten_sprite((40, 145, 230))
         self.assertEqual(len(img.shape), 3)
         self.assertEqual(img.shape[2], 3)
 
@@ -243,7 +245,7 @@ class FlyingUsersHelpersTest(unittest.TestCase):
 
     def test_blit_circle_writes_pixels(self) -> None:
         frame = np.zeros((200, 200, 3), dtype=np.uint8)
-        blit_circle(frame, make_kitten_sprite((40, 145, 230), (40, 45, 230)), 100, 100, 30)
+        blit_circle(frame, make_kitten_sprite((40, 145, 230)), 100, 100, 30)
         self.assertGreater(int(frame.sum()), 0)
 
 
@@ -289,6 +291,37 @@ class FlyingUsersGameTest(unittest.TestCase):
             assert game.match.result is not None
             self.assertFalse(game.match.round.over(2001))
             self.assertEqual(game.match.result.score, game.score)
+
+    #21
+    def test_song_plays_for_the_round_and_stops_on_the_result(self) -> None:
+        self.assertTrue(SONG_PATH.is_file())
+        self.assertGreater(SONG_PATH.stat().st_size, 1_000_000)
+        with tempfile.TemporaryDirectory() as folder:
+            game = FlyingUsersARGame(camera=0, scores=HighScoreList(Path(folder) / "scores.json"))
+            try:
+                frame = np.zeros((180, 320, 3), dtype=np.uint8)
+                self.assertFalse(game.track.started)
+                game.on_frame(frame, now=1000.0)
+                self.assertTrue(game.track.started)
+                self.assertIsNone(game.track._sound)
+                ended = game.on_frame(frame, now=1000.0 + ROUND_SECONDS)
+                self.assertFalse(game.track.started)
+                assert game.match.result is not None
+                assert game.match.result.button.rect is not None
+                x1, y1, x2, y2 = game.match.result.button.rect
+                self.assertGreater(int(ended.sum()), 0)
+                game.on_click((x1 + x2) // 2, (y1 + y2) // 2)
+                again = game.on_frame(frame, now=2000.0)
+                self.assertIsNone(game.match.result)
+                self.assertTrue(game.track.started)
+                self.assertGreater(int(again.sum()), 0)
+                game.lives = 0
+                game.on_frame(frame, now=2001.0)
+                self.assertFalse(game.track.started)
+                assert game.match.result is not None
+            finally:
+                game.close()
+                self.assertFalse(game.track.started)
 
     def test_motion_blob_does_not_spawn_burger(self) -> None:
         game = FlyingUsersARGame(camera=0)
@@ -512,6 +545,18 @@ class CarHitTest(unittest.TestCase):
         game._apply_car_hit(960, 540)
         self.assertEqual(game.score, 5)
         self.assertFalse(game.sound_played)
+
+    def test_kitten_hit_shows_the_yellow_splash(self) -> None:
+        splash = KittenBurgerSplash()
+        splash.trigger(200, 200, 40, now=10.0)
+        canvas = np.full((400, 400, 3), (10, 20, 30), dtype=np.uint8)
+        splash.draw(canvas, 10.0)
+        yellow = (canvas[:, :, 1] > 140) & (canvas[:, :, 2] > 140) & (canvas[:, :, 0] < 140)
+        self.assertGreater(int(np.count_nonzero(yellow)), 50)
+        self.assertTrue(np.array_equal(canvas[0, 0], np.array((10, 20, 30), dtype=np.uint8)))
+        later = np.full((400, 400, 3), (10, 20, 30), dtype=np.uint8)
+        splash.draw(later, 10.8)
+        self.assertTrue(np.array_equal(later, np.full((400, 400, 3), (10, 20, 30), dtype=np.uint8)))
 
     def test_burst_keeps_the_background_around_it(self) -> None:
         flash = CarHitFlash()

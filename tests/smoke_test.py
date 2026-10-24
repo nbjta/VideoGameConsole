@@ -27,6 +27,12 @@ class SmokeTest(unittest.TestCase):
         self.assertIn("handora", ids)
         #9
         self.assertIn("gurli-gris", ids)
+        #11
+        self.assertIn("maalmand", ids)
+        #12
+        self.assertIn("boksning", ids)
+        #13
+        self.assertIn("drum-hero", ids)
 
     def test_webcam_preview_import(self) -> None:
         preview = WebcamPreview(0)

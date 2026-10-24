@@ -15,10 +15,10 @@ import numpy as np
 
 from gamConsole.adventure_city import AdventureCityBackdrop, StreetKitten, _road_layout
 from gamConsole.leader_back_view import ChaseInCar, _cut_white_background
+from gamConsole.drum_track import DrumTrack
 from gamConsole.game_audio import AUDIO_DIR, game_audio
 from gamConsole.opencv_ui import run_window_loop
 from gamConsole.ar_player_view import ARPlayerView
-from gamConsole.overhead_branches import OverheadBranch, draw_branch_warning, reset_branches
 from gamConsole.pose_body_overlay import L_WRIST, R_WRIST, BodyPose
 from gamConsole.round_score import HighScoreList, RoundScore, RoundScoreGame, highscore_file
 
@@ -26,6 +26,10 @@ from gamConsole.round_score import HighScoreList, RoundScore, RoundScoreGame, hi
 CAR_HIT_POINTS = -1
 _HIT_IMAGE = Path(__file__).resolve().parents[1] / "assets" / "user_hit.png"
 _HIT_WAV = AUDIO_DIR / "car.wav"
+_KITTEN_SPLASH = Path(__file__).resolve().parents[1] / "assets" / "kitten_burger_splash.png"
+#21 Dirty Rock af Kulakovka, Pixabay 614878. Filen er målt med afinfo:
+# 81,215 sekunder, 256 kbps, 44,1 kHz, stereo.
+SONG_PATH = Path(__file__).resolve().parents[1] / "assets" / "humdingers" / "kulakovka-dirty-rock-614878.mp3"
 
 
 @dataclass
@@ -215,6 +219,51 @@ class CarHitFlash:
         self._bgr, self._alpha = _cut_white_background(image, spread=12)
 
 
+class KittenBurgerSplash:
+    """#1 Det gule splash, når en burger rammer en killing."""
+
+    def __init__(self, path: Path = _KITTEN_SPLASH) -> None:
+        self._path = path
+        self._bgr: Optional[np.ndarray] = None
+        self._alpha: Optional[np.ndarray] = None
+        self._loaded = False
+        self._pops: List[Tuple[int, int, int, float]] = []
+
+    def clear(self) -> None:
+        self._pops.clear()
+
+    def trigger(self, x: int, y: int, radius: int, now: float) -> None:
+        #1 Splashet dækker killingen. 0,7 sekund, målt på uret.
+        side = max(72, radius * 3)
+        self._pops.append((x, y, side, now + 0.7))
+
+    def draw(self, canvas: np.ndarray, now: float) -> None:
+        alive = [pop for pop in self._pops if pop[3] > now]
+        self._pops = alive
+        if not alive:
+            return
+        self._ensure()
+        if self._bgr is None or self._alpha is None:
+            return
+        sprite_h, sprite_w = self._bgr.shape[:2]
+        for x, y, side, _until in alive:
+            scale = side / max(sprite_h, sprite_w, 1)
+            draw_w = max(1, int(sprite_w * scale))
+            draw_h = max(1, int(sprite_h * scale))
+            sprite = cv2.resize(self._bgr, (draw_w, draw_h), interpolation=cv2.INTER_AREA)
+            alpha = cv2.resize(self._alpha, (draw_w, draw_h), interpolation=cv2.INTER_AREA)
+            ChaseInCar._blit(canvas, sprite, alpha, x - draw_w // 2, y - draw_h // 2)
+
+    def _ensure(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        image = cv2.imread(str(self._path), cv2.IMREAD_COLOR)
+        if image is None:
+            return
+        self._bgr, self._alpha = _cut_white_background(image, spread=12)
+
+
 class WebcamARGame:
     """Fælles løkke for webcam-baserede AR-spil."""
 
@@ -264,17 +313,22 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         self.score = 0
         self.lives = 5
         self.hit_flashes: List[Tuple[int, int, int, int]] = []
-        self.branches: List[OverheadBranch] = reset_branches(0)
-        self.branch_spawn_cooldown = 90
         self.game_over = False
         #1 Gurli Gris' score-tal. Boblerne derfra bliver ikke startet.
         self._points = None
         self._gain_clock: Optional[float] = None
         self.hit_flash = CarHitFlash()
         self.hit_sound = CarHitSound()
+        self.kitten_splash = KittenBurgerSplash()
         #1 #9 Samme 3 minutter og highscore som Gurli, i Humdingers' egen fil.
         board = scores if scores is not None else HighScoreList(highscore_file("humdingers"))
         self.match = RoundScore(board)
+        #21 Sangen kører kun, mens runden spilles.
+        self.track = DrumTrack(SONG_PATH)
+
+    def close(self) -> None:
+        #21 Menuen og lukket vindue stopper sangen.
+        self.track.stop()
 
     def _reset(self) -> None:
         self.burgers = []
@@ -286,10 +340,9 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         self.game_over = False
         #1 Næste killing efter den ene, der allerede står i forgrunden.
         self.next_kitten_id = 2
-        self.branches = reset_branches(0)
-        self.branch_spawn_cooldown = 90
         self._gain_clock = None
         self.hit_flash.clear()
+        self.kitten_splash.clear()
         if self._points is not None:
             self._points.gains.clear()
             self._points.score = 0
@@ -301,6 +354,8 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         return self.city.kittens
 
     def play_again(self) -> None:
+        #21 Spil igen starter sangen forfra.
+        self.track.stop()
         self._reset()
 
     def _release_throw(self, pose: Optional[BodyPose], frame_w: int, frame_h: int) -> None:
@@ -318,9 +373,14 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         shown = self.match.begin(moment, self.score, self.play_again, lambda: frame)
         if shown is not None:
             self.game_over = True
+            #21 Resultatskærmen er stille. Næste runde starter sangen forfra.
+            self.track.stop()
             return shown
         if self.game_over:
+            #21 Livene er brugt op. Resultatskærmen er stille.
+            self.track.stop()
             return self.match.finish(frame, self.score, self.play_again)
+        self.track.ensure_playing()
 
         h, w = frame.shape[:2]
         #1 Posen læses før kastet, så burgeren slippes fra håndleddet.
@@ -329,7 +389,6 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         self.city.tick()
         #1 En modkørende bil i samme bane trækker point fra, én gang pr. bil.
         self._apply_car_hit(w, h)
-        self._tick_branches(frame, w, h)
         for burger in self.burgers:
             burger.tick()
         self.burgers = [b for b in self.burgers if not b.missed(w, h)]
@@ -349,7 +408,7 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
             self.score += 10
             #1 Kenney confirmation_001, når en killing rammes.
             game_audio.points(10)
-            self.hit_flashes.append((cx, cy, radius, 12))
+            self.kitten_splash.trigger(cx, cy, radius, moment)
             self.burgers = [b for b in self.burgers if b is not burger]
             self.city.kittens = [k for k in self.city.kittens if k is not hit]
             self.city.kittens.append(self._spawn_kitten(moment))
@@ -357,8 +416,8 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         scene = self.player.composite(frame, self.city.render(w, h))
         for burger in self.burgers:
             burger.draw(scene)
-        self._draw_branches(scene)
         self._draw_flashes(scene)
+        self.kitten_splash.draw(scene, moment)
         self._tick_gains()
         self.hit_flash.draw(scene)
         for gain in self._score_view().gains:
@@ -367,44 +426,10 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         self.match.stamp(scene, moment)
         if self.lives <= 0:
             self.game_over = True
+            #21 Livene er brugt op. Resultatskærmen er stille.
+            self.track.stop()
             return self.match.finish(scene, self.score, self.play_again)
         return scene
-
-    def _tick_branches(self, frame: np.ndarray, w: int, h: int) -> None:
-        t = self.city.t
-        for branch in list(self.branches):
-            if branch.threatens_center(t, w) and not branch.hit:
-                clearance = branch.clearance_y(h)
-                if not self.player.is_ducked_under(frame, clearance):
-                    branch.hit = True
-                    self.lives -= 1
-                    self.hit_flashes.append((w // 2, clearance + 20, 40, 14))
-                    if self.lives <= 0:
-                        self.game_over = True
-        self.branches = [b for b in self.branches if not b.passed(t, w)]
-        if self.branch_spawn_cooldown > 0:
-            self.branch_spawn_cooldown -= 1
-        elif len(self.branches) < 1:
-            self.branches.append(self._spawn_branch())
-            self.branch_spawn_cooldown = int(self.rng.integers(110, 190))
-
-    def _spawn_branch(self) -> OverheadBranch:
-        branch = OverheadBranch(
-            phase=0.0,
-            speed=0.0,
-            enter_from_left=True,
-            low_y_ratio=float(self.rng.uniform(0.20, 0.26)),
-        )
-        branch.start_t = self.city.t
-        return branch
-
-    def _draw_branches(self, scene: np.ndarray) -> None:
-        t = self.city.t
-        w = scene.shape[1]
-        for branch in self.branches:
-            if branch.threatens_center(t, w):
-                draw_branch_warning(scene, branch.clearance_y(scene.shape[0]))
-            branch.draw(scene, t)
 
     def _keep_one_kitten(self, w: int, h: int, now: float) -> None:
         """#1 Én killing i 5 sekunder. Tiden fjerner den uden at tage et liv."""
@@ -433,7 +458,6 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
             lane=idx % 2,
             kitten_id=self.next_kitten_id,
             fur=StreetKitten.FUR[idx % len(StreetKitten.FUR)],
-            helmet=StreetKitten.HELMETS[idx % len(StreetKitten.HELMETS)],
             enter_from_left=enter_from_left,
             depth=float(self.rng.uniform(0.0, 1.0)),
             shown_at=now,
@@ -515,7 +539,7 @@ class FlyingUsersARGame(RoundScoreGame, WebcamARGame):
         self._score_view().draw_score(frame)
         cv2.putText(
             frame,
-            "Kast burgere - buk dig under grenen",
+            "Kast burgere",
             (12, 82),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -547,11 +571,11 @@ def burger_sprite() -> np.ndarray:
     return _BURGER_SPRITE
 
 
-def make_kitten_sprite(fur: Tuple[int, int, int], helmet: Tuple[int, int, int]) -> np.ndarray:
+def make_kitten_sprite(fur: Tuple[int, int, int]) -> np.ndarray:
     from gamConsole.adventure_city import draw_kitten_side
 
     img = np.full((80, 96, 3), (22, 22, 30), dtype=np.uint8)
-    draw_kitten_side(img, 48, 72, fur, helmet, 0.0)
+    draw_kitten_side(img, 48, 72, fur, 0.0)
     return img
 
 
@@ -592,7 +616,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="gamConsole AR: burgere vs killinger")
     parser.add_argument("--camera", type=int, default=0)
     args = parser.parse_args()
-    FlyingUsersARGame(args.camera).run()
+    game = FlyingUsersARGame(args.camera)
+    try:
+        game.run()
+    finally:
+        #21 Lukket vindue stopper sangen.
+        game.close()
 
 
 if __name__ == "__main__":

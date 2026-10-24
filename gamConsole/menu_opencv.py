@@ -390,7 +390,12 @@ def run_opencv_menu() -> None:
             bg = np.zeros((480, 640, 3), dtype=np.uint8)
 
         canvas, layout = _compose_menu(
-            bg, games, selected_idx, hover_card, hover_main_play, camera_index
+            bg,
+            games,
+            selected_idx,
+            hover_card,
+            hover_main_play,
+            camera_index,
         )
 
         if toast_frames > 0:

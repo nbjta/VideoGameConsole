@@ -20,6 +20,7 @@ class PlayerCutout:
         self._alpha: Optional[np.ndarray] = None
         self._face: Optional[Tuple[int, int, int, int]] = None
         self._frame_i = 0
+        self._grab_every = 4
         self._bgd = np.zeros((1, 65), np.float64)
         self._fgd = np.zeros((1, 65), np.float64)
 
@@ -53,7 +54,7 @@ class PlayerCutout:
             self._face = face
         prior = self._silhouette_prior(frame, self._face)
         cut = prior
-        if self._frame_i % 4 == 0:
+        if self._frame_i % self._grab_every == 0:
             grab = self._grab(frame, prior)
             if grab is not None:
                 cut = grab

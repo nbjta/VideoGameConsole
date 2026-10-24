@@ -49,7 +49,7 @@ GAMES: List[GameEntry] = [
     GameEntry(
         id="just-dance",
         title="Just Dance (Python)",
-        description="Olincollege clone (standard: Cheap Thrills). TensorFlow — opstart ~30 sek.",
+        description="Vælg sang inde i spillet. TensorFlow loader, når sangen starter.",
         mode_arg="cheapthrills",
         source_url="https://github.com/olincollege/just-dance",
         launcher="just_dance",
@@ -87,6 +87,44 @@ GAMES: List[GameEntry] = [
         title="Gurli Gris",
         description="Gurli i landskabet. Et spil varer 3 minutter. Vift en gren på en boble i 0,5 sekund.",
         mode_arg="gurli_gris",
+        source_url="https://github.com/nbjta/VideoGameConsole",
+        launcher="builtin",
+    ),
+    #10
+    GameEntry(
+        id="mars-rover",
+        title="Mars-rover",
+        description="Sæt krop, hjul, mast, kameraer, arm, borehoved og parabol på spøgelses-mærkerne. Baggrunden er Mars.",
+        mode_arg="mars_rover",
+        source_url="https://github.com/nbjta/VideoGameConsole",
+        launcher="builtin",
+    ),
+    #11
+    GameEntry(
+        id="maalmand",
+        title="Målmand",
+        description="Stå i målet og grib boldene. Vip hovedet til siden. Et spil varer 3 minutter.",
+        mode_arg="maalmand",
+        source_url="https://github.com/nbjta/VideoGameConsole",
+        launcher="builtin",
+    ),
+    #12
+    GameEntry(
+        id="boksning",
+        title="Boksning",
+        description="Seks neonfelter rundt om bokseren. Box det felt der lyser. Et spil varer 3 minutter.",
+        mode_arg="boksning",
+        source_url="https://github.com/nbjta/VideoGameConsole",
+        launcher="builtin",
+    ),
+    #13
+    #16 Menuen siger, at nummer og sværhedsgrad vælges i spillet.
+    GameEntry(
+        id="drum-hero",
+        title="Drum Hero",
+        #24 Hvert nummer har sine egne slag. Let holder færre, svær har mindre træf.
+        description="Noder falder ned på fire trommer. Hvert nummer har sine egne slag. Vælg let, mellem eller svær. Et spil varer 3 minutter.",
+        mode_arg="drum_hero",
         source_url="https://github.com/nbjta/VideoGameConsole",
         launcher="builtin",
     ),

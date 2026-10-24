@@ -312,7 +312,6 @@ class StreetKitten(StreetActor):
     """Killing der løber ind fra venstre eller højre kant — original tegning."""
 
     FUR = ((40, 145, 230), (170, 170, 175), (210, 235, 250), (55, 70, 90))
-    HELMETS = ((40, 45, 230), (20, 210, 255), (230, 130, 40), (50, 175, 70))
     #1 Fem sekunder på uret, ikke på antal billeder.
     VISIBLE_SECONDS = 5.0
 
@@ -323,7 +322,6 @@ class StreetKitten(StreetActor):
         lane: int,
         kitten_id: int,
         fur: Color,
-        helmet: Color,
         *,
         enter_from_left: bool = True,
         depth: float = 1.0,
@@ -332,7 +330,6 @@ class StreetKitten(StreetActor):
         super().__init__(phase, speed, lane)
         self.kitten_id = kitten_id
         self.fur = fur
-        self.helmet = helmet
         self.enter_from_left = enter_from_left
         #1 1 er forgrunden. 0 er horisonten.
         self.depth = float(np.clip(depth, 0.0, 1.0))
@@ -394,7 +391,7 @@ class StreetKitten(StreetActor):
         h, w = canvas.shape[:2]
         feet_x, feet_y, scale = self._depth(t, w, h)
         flip = not self.enter_from_left
-        draw_kitten_side(canvas, feet_x, feet_y, self.fur, self.helmet, t, flip=flip, scale=scale)
+        draw_kitten_side(canvas, feet_x, feet_y, self.fur, t, flip=flip, scale=scale)
 
     def hitbox(self, t: float, width: int, height: int) -> Tuple[int, int, int]:
         x, feet_y, scale = self._depth(t, width, height)
@@ -409,7 +406,6 @@ def _draw_kitten_side_core(
     feet_x: int,
     feet_y: int,
     fur: Color,
-    helmet: Color,
     t: float,
 ) -> None:
     walk = 5 if int(t / 5) % 2 == 0 else -5
@@ -420,9 +416,7 @@ def _draw_kitten_side_core(
     cv2.circle(canvas, (hx, hy), 12, fur, -1, cv2.LINE_AA)
     cv2.fillConvexPoly(canvas, np.array([[hx - 7, hy - 6], [hx - 3, hy - 18], [hx + 1, hy - 6]]), fur)
     cv2.fillConvexPoly(canvas, np.array([[hx + 2, hy - 6], [hx + 7, hy - 18], [hx + 10, hy - 6]]), fur)
-    cv2.ellipse(canvas, (hx, hy - 9), (13, 7), 0, 0, 360, helmet, -1, cv2.LINE_AA)
-    shine = tuple(min(255, c + 45) for c in helmet)
-    cv2.ellipse(canvas, (hx, hy - 12), (8, 4), 0, 0, 360, shine, -1, cv2.LINE_AA)
+    #1 Ingen hjelm.
     cv2.circle(canvas, (hx + 5, hy - 1), 3, (255, 255, 255), -1, cv2.LINE_AA)
     cv2.circle(canvas, (hx + 6, hy - 1), 2, (25, 25, 25), -1, cv2.LINE_AA)
     cv2.circle(canvas, (hx + 8, hy + 4), 2, (90, 140, 200), -1, cv2.LINE_AA)
@@ -437,7 +431,6 @@ def draw_kitten_side(
     feet_x: int,
     feet_y: int,
     fur: Color,
-    helmet: Color,
     t: float,
     *,
     flip: bool = False,
@@ -446,7 +439,7 @@ def draw_kitten_side(
     pad_w, pad_h = 110, 100
     patch = np.zeros((pad_h, pad_w, 3), dtype=np.uint8)
     local_x, local_y = pad_w // 2, pad_h - 8
-    _draw_kitten_side_core(patch, local_x, local_y, fur, helmet, t)
+    _draw_kitten_side_core(patch, local_x, local_y, fur, t)
     if flip:
         patch = cv2.flip(patch, 1)
     if abs(scale - 1.0) > 0.04:
@@ -604,7 +597,6 @@ class AdventureCityBackdrop:
                 lane=0,
                 kitten_id=1,
                 fur=StreetKitten.FUR[0],
-                helmet=StreetKitten.HELMETS[0],
                 enter_from_left=True,
                 depth=1.0,
             )

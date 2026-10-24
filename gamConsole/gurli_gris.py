@@ -20,6 +20,7 @@ import numpy as np
 from gamConsole.flying_users_ar import WebcamARGame
 from gamConsole.head_tilt import HeadTilt
 from gamConsole.leader_back_view import ChaseInCar, _arm_angles, _cut_white_background, _rotate_bottom
+from gamConsole.drum_track import DrumTrack
 from gamConsole.game_audio import game_audio
 from gamConsole.opencv_ui import draw_text, measure_text
 from gamConsole.round_score import HighScoreList, RoundScore, RoundScoreGame, highscore_file
@@ -29,6 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKGROUND_PATH = ROOT / "assets" / "gurli_gris" / "background.png"
 FIGURE_PATH = ROOT / "assets" / "gurli_gris" / "gurli.png"
 BRANCH_PATH = ROOT / "assets" / "gurli_gris" / "branch.png"
+#19 Motivational af DailyVibe, Pixabay 614432. Filen er målt med afinfo:
+# 178,834 sekunder, 256 kbps, 44,1 kHz, stereo.
+SONG_PATH = ROOT / "assets" / "gurli_gris" / "dailyvibe-motivational-614432.mp3"
 #9 Græsset i baggrundsbilledet starter ved række 101 af 148.
 _FEET_Y = 0.90
 _FIGURE_H = 0.62
@@ -636,11 +640,17 @@ class GurliGrisGame(RoundScoreGame, WebcamARGame):
         #9 Samme 3 minutter og highscore som Humdingers, i Gurlis egen fil.
         board = scores if scores is not None else HighScoreList(highscore_file("gurli_gris"))
         self.match = RoundScore(board)
+        #19 Sangen kører kun, mens runden spilles.
+        self.track = DrumTrack(SONG_PATH)
 
     def close(self) -> None:
+        #19 Menuen og lukket vindue stopper sangen.
+        self.track.stop()
         self.player.close()
 
     def play_again(self) -> None:
+        #19 Spil igen starter sangen forfra.
+        self.track.stop()
         self.player.bubbles.reset()
         self.match.clear()
 
@@ -655,7 +665,10 @@ class GurliGrisGame(RoundScoreGame, WebcamARGame):
             lambda: self.backdrop.render(camera.shape[1], camera.shape[0]),
         )
         if shown is not None:
+            #19 Resultatskærmen er stille. Næste runde starter sangen forfra.
+            self.track.stop()
             return shown
+        self.track.ensure_playing()
         self.player.refresh_pose(camera)
         height, width = camera.shape[:2]
         background = self.backdrop.render(width, height)
